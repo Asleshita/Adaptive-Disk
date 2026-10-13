@@ -1,0 +1,1758 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Adaptive Disk Scheduler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a home page of big coloured tiles; each tile opens one view with a Home button back. Kernel Ops orange, red and yellow throughout; red marks our scheduler, orange the disk head. */
+:root {
+  --bg: #FFF5EB; --surface: #FFFFFF; --ink: #2B1B10; --muted: #7A5B47; --line: #F2D8C3; --grid: #F8E9DC;
+  --accent: #D7261E; --accent-soft: #FDE4E1; --head: #F7941D; --crit: #C2185B; --crit-soft: #FBE3EC;
+  --bar: #E8C7AE; --m0: #2a78d6; --m1: #eb6834; --m2: #1baf7a; --m3: #eda100; --m4: #e87ba4;
+  --chassis: #F3E6D9; --chassis-edge: #C9AE97; --platter-hi: #FFFFFF; --platter-lo: #AEB4BC; --arm: #2B1B10; --copper: #F7941D;
+  --orange: #F7941D; --yellow: #FDC44E; --red: #D7261E;
+  --f-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--f-body); margin: 0; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-inline: 20px; padding-block: 18px 40px; display: grid; gap: 16px; }
+h1, h2, h3 { font-family: var(--f-display); margin: 0; text-wrap: balance; letter-spacing: 0.005em; }
+h1 { font-size: 1.55rem; font-weight: 700; }
+h2 { font-size: 1.15rem; font-weight: 700; }
+h3 { font-size: 1rem; font-weight: 600; }
+.num, td.n, .mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+button, select, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header.top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.eyebrow { font: 600 0.72rem/1.2 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.team { font-size: 0.85rem; color: var(--muted); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; min-width: 0; box-shadow: 0 1px 2px rgba(20, 30, 50, 0.05); }
+.ctl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 12px; align-items: end; }
+.f { display: grid; gap: 4px; min-width: 0; }
+.f > span { font-size: 0.74rem; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; }
+.f > span i { font-style: normal; font-weight: 400; }
+.f input, .f select, .f textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.f textarea { font-family: var(--f-mono); font-size: 0.9rem; resize: vertical; }
+.wide { grid-column: 1 / -1; }
+.btn { padding: 8px 12px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: var(--surface); font-weight: 600; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+details.adv summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+details.adv .ctl { margin-top: 10px; }
+.chk { display: flex; gap: 8px; align-items: center; font-size: 0.85rem; }
+.note { margin: 0; font-size: 0.88rem; color: var(--muted); }
+.err { background: var(--crit-soft); color: var(--ink); border: 1px solid var(--crit); border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
+
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; cursor: pointer; color: var(--muted); font-weight: 600; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--head); }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.kpi b { display: block; font: 600 1.35rem/1.2 var(--f-display); }
+.kpi span { font-size: 0.82rem; color: var(--muted); }
+.tw { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+th { text-align: right; font-weight: 600; color: var(--muted); font-size: 0.76rem; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+td { padding: 6px 10px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+tr.ours td { background: var(--accent-soft); }
+td.best { font-weight: 700; color: var(--accent); }
+.legendrow { display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.8rem; color: var(--muted); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px 8px; min-width: 0; }
+.chart.ours { border-color: var(--accent); }
+.chart header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.chart header b { font-family: var(--f-display); }
+.chart header span { font-size: 0.8rem; color: var(--muted); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font-family: var(--f-mono); }
+.t-ink { fill: var(--ink); } .t-mut { fill: var(--muted); }
+.ax { stroke: var(--line); } .gr { stroke: var(--grid); }
+.trk { fill: none; stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; }
+.trk.ours { stroke: var(--accent); stroke-width: 1.6; }
+.trk.faint { stroke: var(--line); }
+.jump { fill: none; stroke: var(--muted); stroke-width: 1.1; stroke-dasharray: 4 3; }
+.dot { fill: var(--surface); stroke: var(--ink); stroke-width: 1.2; }
+.ours .dot, .dot.ours { stroke: var(--accent); }
+.hd { fill: var(--head); }
+.bar { fill: var(--bar); } .bar.ours { fill: var(--accent); }
+.crit { fill: var(--crit); } .crits { stroke: var(--crit); }
+.pt { fill: var(--muted); fill-opacity: 0.55; }
+
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 12px; }
+.decide { display: grid; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); font-size: 0.8rem; font-weight: 600; }
+.why { font-size: 1rem; }
+.meter { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--head); }
+.meter.over > i { background: var(--crit); }
+.sig { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 0.84rem; }
+.stepbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.stepbar .f { min-width: 130px; }
+.inj { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+.inj .f { width: 130px; }
+.qt td, .qt th { padding: 4px 8px; }
+tr.pick td { background: var(--accent-soft); font-weight: 600; }
+.story { font-size: 0.98rem; display: grid; gap: 6px; }
+.story p { margin: 0; max-width: 72ch; }
+.about { display: grid; gap: 14px; max-width: 80ch; }
+.about p, .about li { margin: 0; }
+.about ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+code, pre { font-family: var(--f-mono); font-size: 0.85rem; }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0; }
+.empty { padding: 24px; text-align: center; color: var(--muted); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.cd { width: 40px; height: 40px; border-radius: 50%; flex: none; border: 1px solid var(--chassis-edge);
+  background: radial-gradient(circle, var(--surface) 0 15%, var(--chassis-edge) 16% 19%, transparent 20%),
+    conic-gradient(from 200deg, #c8cdd3, #f2c4d6, #c3e3f6, #d6f0c2, #f4e5b3, #e0c8f4, #c8cdd3, #f2c4d6, #c3e3f6, #d6f0c2, #f4e5b3, #e0c8f4, #c8cdd3); }
+.sim { display: grid; gap: 8px; }
+.sim canvas { width: 100%; display: block; }
+.simstat { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.82rem; color: var(--muted); }
+.simstat b { color: var(--ink); font-family: var(--f-mono); font-weight: 500; }
+.simwhy { font-size: 0.88rem; min-height: 2.8em; }
+.simclock { font-family: var(--f-mono); font-size: 0.85rem; color: var(--muted); }
+.stepbar .grow { flex: 1 1 220px; }
+.stepbar .grow input { width: 100%; }
+.ev-REJECT, .ev-miss { color: var(--crit); font-weight: 600; }
+.ev-RESCUE { color: var(--head); font-weight: 600; }
+.ev-DEFER, .ev-ADMIT { color: var(--accent); font-weight: 600; }
+td.cellwrap { white-space: normal; text-align: left; min-width: 260px; }
+.pick { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: end; }
+.pick .f { flex: 1 1 320px; }
+.pick .f > span { font-size: 0.85rem; color: var(--ink); }
+.pick select { font-size: 1rem; padding: 9px 11px; }
+.panel .note { margin-top: 10px; }
+.switches { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; margin-top: 10px; }
+.switches .f { width: 190px; }
+#customBox { margin-top: 10px; }
+.settings { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+nav.tabs { display: none; }
+.appbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.appbar .ttl { display: grid; }
+.appbar .ttl b { font: 700 1.25rem/1.2 var(--f-display); }
+.appbar .ttl span { font-size: 0.8rem; color: var(--muted); }
+.homebtn { border: 0; border-radius: 999px; padding: 9px 16px; background: var(--red); color: #fff; font-weight: 700; cursor: pointer; box-shadow: 0 3px 10px rgba(215, 38, 30, 0.25); }
+.homebtn:hover { filter: brightness(1.06); }
+.pagehead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pagehead h2 { font-size: 1.5rem; }
+.pagehead .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--orange); box-shadow: 18px 0 0 var(--yellow), 36px 0 0 var(--red); margin-right: 40px; }
+.hero { border-radius: 20px; padding: 30px 30px 26px; color: #fff; background: linear-gradient(120deg, #F26B1D 0%, #E8492A 50%, #C81E1E 100%); display: grid; gap: 10px; position: relative; overflow: hidden; }
+.hero::after { content: ""; position: absolute; right: -60px; top: -60px; width: 260px; height: 260px; border-radius: 50%; background: radial-gradient(circle, transparent 0 28%, rgba(253, 196, 78, 0.95) 29% 52%, rgba(255, 255, 255, 0.18) 53% 100%); }
+.hero .k { font: 700 0.8rem/1 var(--f-mono); letter-spacing: 0.14em; color: #FFE9B8; }
+.hero h1 { font-size: clamp(1.7rem, 4.2vw, 2.6rem); line-height: 1.1; max-width: 18ch; position: relative; z-index: 1; }
+.hero p { margin: 0; font-size: 1.05rem; max-width: 56ch; position: relative; z-index: 1; }
+.hero .team { color: #FFE9B8; font-size: 0.9rem; position: relative; z-index: 1; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.tile { border: 0; border-radius: 18px; padding: 18px 18px 16px; text-align: left; color: #fff; cursor: pointer; display: grid; gap: 8px; align-content: start; min-height: 158px; box-shadow: 0 8px 18px rgba(120, 40, 10, 0.12); transition: transform 0.12s ease, box-shadow 0.12s ease; font: inherit; }
+.tile:hover { transform: translateY(-3px); box-shadow: 0 12px 24px rgba(120, 40, 10, 0.18); }
+.tile svg { width: 34px; height: 34px; }
+.tile b { font: 700 1.25rem/1.2 var(--f-display); }
+.tile span { font-size: 0.95rem; line-height: 1.4; }
+.tile.big { grid-column: span 2; min-height: 180px; }
+.t-orange { background: #F7941D; color: #2B1B10; } .t-red { background: #D7261E; } .t-pink { background: #C2185B; }
+.t-yellow { background: #FDC44E; color: #2B1B10; } .t-purple { background: #6A3FC1; } .t-teal { background: #00796B; } .t-blue { background: #1565C0; }
+.chcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+input[type=range], input[type=checkbox] { accent-color: var(--red); }
+.chcard { align-content: start; border: 2px solid var(--line); background: var(--surface); border-radius: 16px; padding: 16px; display: grid; gap: 8px; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.chcard:hover { border-color: var(--orange); }
+.chcard .n { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font: 700 1.05rem var(--f-display); color: #fff; background: var(--red); }
+.chcard.easy .n { background: #2E9E5B; } .chcard.med .n { background: var(--orange); }
+.chcard b { font: 700 1.1rem var(--f-display); }
+.chcard .lvl { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.btn { background: var(--red); border-color: var(--red); }
+.btn.ghost { color: var(--red); border-color: var(--red); }
+#simPlay { background: var(--orange); border-color: var(--orange); color: #2B1B10; min-width: 90px; }
+@media (max-width: 640px) { .tile.big { grid-column: auto; } }
+/* ---- welcome page: Diskie panics under FCFS, calms down under Adaptive (6 s loop) */
+.wel { min-height: min(86vh, 760px); border-radius: 24px; color: #fff; padding: 32px; display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.3fr); align-items: center; gap: 16px; overflow: hidden;
+  background: radial-gradient(circle at calc(100% - 64px) 58px, rgba(253, 196, 78, 0.85) 0 38px, transparent 39px), linear-gradient(135deg, #F7941D 0%, #EE5A24 45%, #C81E1E 100%); }
+.wel .txt { display: grid; gap: 14px; align-content: center; }
+.wel .k { font: 700 0.8rem/1 var(--f-mono); letter-spacing: 0.14em; color: #FFE9B8; }
+.wel h1 { font-size: clamp(2.3rem, 6vw, 3.8rem); line-height: 1.02; }
+.wel p { margin: 0; font-size: 1.12rem; max-width: 36ch; }
+.wel .small { font-size: 0.9rem; color: #FFE9B8; }
+.go { justify-self: start; background: #FDC44E; color: #2B1B10; border: 0; border-radius: 999px; padding: 15px 30px; font: 700 1.2rem var(--f-display); cursor: pointer; box-shadow: 0 6px 0 #B9781A; animation: pulse 1.8s ease-in-out infinite; }
+.go:hover { animation-play-state: paused; filter: brightness(1.06); }
+.go:active { transform: translateY(4px); box-shadow: 0 2px 0 #B9781A; }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+.wave { display: inline-block; transform-origin: 70% 70%; animation: wave 1.6s ease-in-out infinite; }
+@keyframes wave { 0%, 60%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(16deg); } 20%, 40% { transform: rotate(-10deg); } }
+.scene { width: 100%; height: auto; overflow: visible; }
+.scene text { font-family: var(--f-display); }
+.cdshine { width: 100%; height: 100%; border-radius: 50%; animation: spin 1.6s linear infinite;
+  background: conic-gradient(from 0deg, rgba(255,255,255,0) 0deg, rgba(255,170,70,.55) 25deg, rgba(250,240,90,.5) 45deg, rgba(90,225,150,.5) 65deg, rgba(80,170,255,.6) 85deg, rgba(175,100,255,.55) 105deg, rgba(255,255,255,0) 130deg,
+    rgba(255,255,255,0) 180deg, rgba(255,170,70,.55) 205deg, rgba(250,240,90,.5) 225deg, rgba(90,225,150,.5) 245deg, rgba(80,170,255,.6) 265deg, rgba(175,100,255,.55) 285deg, rgba(255,255,255,0) 310deg); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.scene .diskie { transform-box: view-box; transform-origin: 280px 230px; animation: shake 6s infinite; }
+@keyframes shake { 0% { transform: rotate(0); } 3% { transform: rotate(-1.6deg); } 6% { transform: rotate(1.6deg); } 9% { transform: rotate(-1.4deg); } 12% { transform: rotate(1.4deg); } 15% { transform: rotate(-1.6deg); } 18% { transform: rotate(1.5deg); }
+  21% { transform: rotate(-1.4deg); } 24% { transform: rotate(1.6deg); } 27% { transform: rotate(-1.5deg); } 30% { transform: rotate(1.4deg); } 33% { transform: rotate(-1.6deg); } 36% { transform: rotate(1.5deg); } 39% { transform: rotate(-1.2deg); } 42%, 100% { transform: rotate(0); } }
+.scene .arm { transform-box: view-box; transform-origin: 450px 92px; animation: arm 6s ease-in-out infinite; }
+@keyframes arm { 0% { transform: rotate(0); } 5% { transform: rotate(-26deg); } 10% { transform: rotate(16deg); } 15% { transform: rotate(-30deg); } 20% { transform: rotate(12deg); } 25% { transform: rotate(-22deg); } 30% { transform: rotate(18deg); }
+  35% { transform: rotate(-28deg); } 40% { transform: rotate(10deg); } 45% { transform: rotate(0); } 60% { transform: rotate(-9deg); } 75% { transform: rotate(-16deg); } 90% { transform: rotate(-6deg); } 100% { transform: rotate(0); } }
+.scene .panic { animation: panic 6s infinite; } @keyframes panic { 0%, 43% { opacity: 1; } 46%, 100% { opacity: 0; } }
+.scene .calm { animation: calm 6s infinite; } @keyframes calm { 0%, 45% { opacity: 0; } 49%, 97% { opacity: 1; } 100% { opacity: 0; } }
+.scene .angry { animation: angry 6s infinite; } @keyframes angry { 0%, 4% { opacity: 0; } 8%, 50% { opacity: 1; } 54%, 100% { opacity: 0; } }
+.scene .yay { animation: yay 6s infinite; } @keyframes yay { 0%, 60% { opacity: 0; } 64%, 96% { opacity: 1; } 100% { opacity: 0; } }
+.scene .drop { transform-box: fill-box; animation: drip 2s infinite; } .scene .drop2 { animation-delay: 0.7s; }
+@keyframes drip { 0% { opacity: 0; transform: translateY(0); } 15% { opacity: 1; } 70% { opacity: 1; transform: translateY(22px); } 75%, 100% { opacity: 0; transform: translateY(22px); } }
+.scene .sweat { animation: panic 6s infinite; }
+.scene .far { transform-box: fill-box; transform-origin: center bottom; animation: far 6s infinite; }
+@keyframes far { 0%, 8% { fill: #D7261E; transform: translateY(0); } 12%, 20%, 28%, 36%, 44%, 52% { fill: #D7261E; transform: translateY(-6px) rotate(-6deg); } 16%, 24%, 32%, 40%, 48%, 56% { fill: #D7261E; transform: translateY(0) rotate(6deg); }
+  60% { fill: #2E9E5B; transform: translateY(0); } 66% { fill: #2E9E5B; transform: translateY(-26px); } 72% { fill: #2E9E5B; transform: translateY(0); } 78% { fill: #2E9E5B; transform: translateY(-18px); } 84%, 100% { fill: #2E9E5B; transform: translateY(0); } }
+.scene .hop { transform-box: fill-box; animation: hop 0.9s ease-in-out infinite; }
+@keyframes hop { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+@media (max-width: 860px) { .wel { grid-template-columns: 1fr; padding: 22px; } }
+@media (prefers-reduced-motion: reduce) { .scene *, .cdshine, .go, .wave { animation: none !important; } .scene .calm, .scene .yay { opacity: 0; } }
+@media (max-width: 760px) { .cols { grid-template-columns: 1fr; } h1 { font-size: 1.3rem; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <section id="v-welcome" aria-label="Welcome">
+    <div class="wel">
+      <div class="txt">
+        <div class="k">KERNEL OPS &#183; OSH022 &#183; CTRL FREAKS</div>
+        <h1><span class="wave" aria-hidden="true">&#128075;</span> Hi! I'm Diskie.</h1>
+        <p>I'm a hard disk. Everybody wants something from me at the same time, and my poor arm can only be in one place.</p>
+        <p>With an old rule I panic. With our <b>Adaptive Disk Request Scheduler</b> I stay calm, and nobody waits forever.</p>
+        <button type="button" class="go" id="letsGo">Let's go &#8594;</button>
+        <div class="small">Move your mouse: I'm watching you.</div>
+      </div>
+      <svg class="scene" viewBox="0 0 820 450" role="img" aria-label="Cartoon hard disk Diskie: its arm panics under FCFS and moves calmly under the adaptive scheduler">
+  <defs>
+    <radialGradient id="wplat" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#AEB4BC"/></radialGradient>
+    <radialGradient id="whub" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#9AA1AA"/></radialGradient>
+    <clipPath id="wclip"><circle cx="280" cy="250" r="128"/></clipPath>
+  </defs>
+  <g class="diskie">
+    <rect x="96" y="30" width="390" height="380" rx="40" fill="#F3E6D9" stroke="#8C6A52" stroke-width="5"/>
+    <circle cx="124" cy="58" r="7" fill="#C9AE97"/><circle cx="458" cy="384" r="7" fill="#C9AE97"/><circle cx="124" cy="384" r="7" fill="#C9AE97"/>
+    <circle cx="280" cy="250" r="128" fill="url(#wplat)" stroke="#8C6A52" stroke-width="3"/>
+    <foreignObject x="152" y="122" width="256" height="256" clip-path="url(#wclip)"><div xmlns="http://www.w3.org/1999/xhtml" class="cdshine"></div></foreignObject>
+    <circle cx="280" cy="250" r="34" fill="url(#whub)" stroke="#8C6A52" stroke-width="3"/><circle cx="280" cy="250" r="8" fill="#2B1B10"/>
+    <g id="eyes">
+      <circle cx="226" cy="78" r="21" fill="#fff" stroke="#2B1B10" stroke-width="3"/><circle cx="334" cy="78" r="21" fill="#fff" stroke="#2B1B10" stroke-width="3"/>
+      <circle class="pupil" data-cx="226" data-cy="78" cx="226" cy="78" r="9" fill="#2B1B10"/><circle class="pupil" data-cx="334" data-cy="78" cx="334" cy="78" r="9" fill="#2B1B10"/>
+      <circle cx="229" cy="74" r="3" fill="#fff" class="glint"/><circle cx="337" cy="74" r="3" fill="#fff" class="glint"/>
+    </g>
+    <path class="panic" d="M262 110 Q280 98 298 110" stroke="#2B1B10" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path class="calm" d="M258 102 Q280 120 302 102" stroke="#2B1B10" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <g class="sweat"><path class="drop" d="M372 52 q7 12 0 16 q-7 -4 0 -16z" fill="#5BB8FF"/><path class="drop drop2" d="M388 76 q6 10 0 13 q-6 -3 0 -13z" fill="#5BB8FF"/></g>
+    <g class="arm">
+      <rect x="454" y="70" width="40" height="44" rx="10" fill="#F7941D" stroke="#8C6A52" stroke-width="3" transform="rotate(40 474 92)"/>
+      <path d="M450 80 L330 214 L322 207 L440 72 Z" fill="#2B1B10"/>
+      <rect x="312" y="204" width="22" height="16" rx="4" fill="#F7941D" stroke="#2B1B10" stroke-width="2" transform="rotate(-42 323 212)"/>
+      <circle cx="450" cy="92" r="20" fill="url(#whub)" stroke="#8C6A52" stroke-width="3"/><circle cx="450" cy="92" r="6" fill="#2B1B10"/>
+    </g>
+  </g>
+  <g class="panic"><rect x="150" y="418" width="262" height="30" rx="15" fill="#2B1B10"/><text x="281" y="439" text-anchor="middle" font-size="16" font-weight="700" fill="#FDC44E">FCFS: arm running everywhere!</text></g>
+  <g class="calm"><rect x="150" y="418" width="262" height="30" rx="15" fill="#FFFFFF"/><text x="281" y="439" text-anchor="middle" font-size="16" font-weight="700" fill="#2E9E5B">Adaptive: calm, quick and fair</text></g>
+  <g><g class="hop" style="animation-delay:0s"><circle cx="560" cy="372" r="21" fill="#FDC44E"/><circle cx="553" cy="368" r="5" fill="#fff"/><circle cx="567" cy="368" r="5" fill="#fff"/><circle cx="554" cy="369" r="2.4" fill="#2B1B10"/><circle cx="568" cy="369" r="2.4" fill="#2B1B10"/><path d="M554 379 Q560 384 566 379" stroke="#2B1B10" stroke-width="2" fill="none" stroke-linecap="round"/></g><g class="hop" style="animation-delay:0.15s"><circle cx="612" cy="372" r="21" fill="#F7941D"/><circle cx="605" cy="368" r="5" fill="#fff"/><circle cx="619" cy="368" r="5" fill="#fff"/><circle cx="606" cy="369" r="2.4" fill="#2B1B10"/><circle cx="620" cy="369" r="2.4" fill="#2B1B10"/><path d="M606 379 Q612 384 618 379" stroke="#2B1B10" stroke-width="2" fill="none" stroke-linecap="round"/></g><g class="hop" style="animation-delay:0.3s"><circle cx="664" cy="372" r="21" fill="#FF7AA8"/><circle cx="657" cy="368" r="5" fill="#fff"/><circle cx="671" cy="368" r="5" fill="#fff"/><circle cx="658" cy="369" r="2.4" fill="#2B1B10"/><circle cx="672" cy="369" r="2.4" fill="#2B1B10"/><path d="M658 379 Q664 384 670 379" stroke="#2B1B10" stroke-width="2" fill="none" stroke-linecap="round"/></g><g class="hop" style="animation-delay:0.45s"><circle cx="716" cy="372" r="21" fill="#9C7BFF"/><circle cx="709" cy="368" r="5" fill="#fff"/><circle cx="723" cy="368" r="5" fill="#fff"/><circle cx="710" cy="369" r="2.4" fill="#2B1B10"/><circle cx="724" cy="369" r="2.4" fill="#2B1B10"/><path d="M710 379 Q716 384 722 379" stroke="#2B1B10" stroke-width="2" fill="none" stroke-linecap="round"/></g></g>
+  <text x="638" y="420" text-anchor="middle" font-size="14" font-weight="700" fill="#FFE9B8">requests waiting in line</text>
+  <g><circle class="far" cx="742" cy="150" r="26" fill="#D7261E"/>
+    <circle cx="734" cy="144" r="6" fill="#fff"/><circle cx="750" cy="144" r="6" fill="#fff"/><circle cx="735" cy="145" r="3" fill="#2B1B10"/><circle cx="751" cy="145" r="3" fill="#2B1B10"/>
+    <path class="panic" d="M730 135 l9 5 M754 135 l-9 5" stroke="#2B1B10" stroke-width="2.5" stroke-linecap="round"/>
+    <path class="panic" d="M734 162 Q742 156 750 162" stroke="#2B1B10" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <path class="calm" d="M733 158 Q742 167 751 158" stroke="#2B1B10" stroke-width="2.5" fill="none" stroke-linecap="round"/></g>
+  <g class="angry"><rect x="560" y="58" width="236" height="52" rx="14" fill="#FFFFFF"/><path d="M730 110 l10 14 l4 -14z" fill="#FFFFFF"/>
+    <text x="678" y="80" text-anchor="middle" font-size="15" font-weight="700" fill="#D7261E">Hey! I've been waiting</text><text x="678" y="99" text-anchor="middle" font-size="15" font-weight="700" fill="#D7261E">forever over here!</text></g>
+  <g class="yay"><rect x="590" y="64" width="190" height="40" rx="14" fill="#FFFFFF"/><path d="M730 104 l10 14 l4 -14z" fill="#FFFFFF"/>
+    <text x="685" y="90" text-anchor="middle" font-size="16" font-weight="700" fill="#2E9E5B">Rescued! Thank you!</text></g>
+</svg>
+    </div>
+  </section>
+
+  <header class="appbar" id="appbar" hidden>
+    <button type="button" class="homebtn" id="homeBtn">&#8592; Home</button>
+    <span class="cd" aria-hidden="true"></span>
+    <div class="ttl"><b>Adaptive Disk Request Scheduler</b><span>CTRL Freaks &#183; Kernel Ops &#183; OSH022</span></div>
+  </header>
+
+  <section id="v-home" aria-label="Home" hidden>
+    <div style="display:grid;gap:16px">
+      <div class="hero">
+        <div class="k">KERNEL OPS &#183; OSH022</div>
+        <h1>Adaptive Disk Request Scheduler</h1>
+        <p>A hard disk can serve only one request at a time, so the order matters. Our scheduler picks the right rule for the moment: fast like SSTF, and it never lets a request starve.</p>
+        <div class="team">CTRL Freaks &#183; Durga Vaishnavi Ch, K Bhuvana Royal, Asleshita Tuduku</div>
+      </div>
+      <div class="tiles">
+        <button type="button" class="tile big t-orange" data-go="sim">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="10" cy="13" r="8"/><circle cx="10" cy="13" r="2"/><path d="M21 3l-8 9"/></svg>
+          <b>Watch the disks race</b><span>Two hard disks get the same requests. One uses an old rule, one uses ours. Press Play and watch the arms.</span></button>
+        <button type="button" class="tile t-red" data-go="compare">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+          <b>Results</b><span>Who moved the arm least, and who kept requests waiting least.</span></button>
+        <button type="button" class="tile t-pink" data-go="starve">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 2h12M6 22h12M7 2c0 6 10 6 10 10S7 16 7 22M17 2c0 6-10 6-10 10s10 4 10 10"/></svg>
+          <b>Starvation</b><span>SSTF forgets a far request. Ours rescues it.</span></button>
+        <button type="button" class="tile t-purple" data-go="challenges">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 01-10 0zM7 6H4a3 3 0 003 4M17 6h3a3 3 0 01-3 4"/></svg>
+          <b>Hackathon challenges</b><span>Challenges 1 to 5, one click each.</span></button>
+        <button type="button" class="tile t-yellow" data-go="step">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 20h5v-5h5v-5h5V5h3"/></svg>
+          <b>Step by step</b><span>Slow motion: why each request was picked.</span></button>
+        <button type="button" class="tile t-teal" data-go="trace">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"/></svg>
+          <b>Event log</b><span>Every event with its time, as proof.</span></button>
+        <button type="button" class="tile t-blue" data-go="about">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.5 9a2.5 2.5 0 015 .5c0 2-2.5 2-2.5 4M12 17h.01"/></svg>
+          <b>How it works</b><span>The four checks our scheduler makes, in plain words.</span></button>
+      </div>
+    </div>
+  </section>
+
+  <section id="v-challenges" aria-label="Hackathon challenges" hidden>
+    <div style="display:grid;gap:14px">
+      <div class="pagehead"><span class="dot" aria-hidden="true"></span><h2>Hackathon challenges</h2></div>
+      <p class="note" style="font-size:0.95rem">Pick a challenge. It loads the exact test from the challenge sheet and opens the page that proves it.</p>
+      <div class="chcards">
+        <button type="button" class="chcard easy" data-ch="c1"><span class="n">1</span><span class="lvl">Easy</span><b>Hand-worked baseline paths</b><span>Textbook queue, head at 53. FCFS 640, SSTF 236, SCAN 236, C-SCAN 382.</span></button>
+        <button type="button" class="chcard med" data-ch="c2"><span class="n">2</span><span class="lvl">Medium</span><b>Short-queue starvation</b><span>Only two requests ever wait, yet the far one must still be rescued.</span></button>
+        <button type="button" class="chcard med" data-ch="c3"><span class="n">3</span><span class="lvl">Medium</span><b>Overload queue cap</b><span>64 requests arrive at once, the queue holds 32. Defer or reject, nothing lost.</span></button>
+        <button type="button" class="chcard" data-ch="c4"><span class="n">4</span><span class="lvl">Hard</span><b>Rescue flood</b><span>New requests keep appearing on the rescue path. The rescue must still end.</span></button>
+        <button type="button" class="chcard" data-ch="c5"><span class="n">5</span><span class="lvl">Hard</span><b>Request deadlines</b><span>R1 due in 100 ms, R2 due in 10 ms. Who goes first, and why.</span></button>
+        <button type="button" class="chcard" data-ch="c5b"><span class="n">5</span><span class="lvl">Hard, part 2</span><b>Deadlines cannot starve others</b><span>A flood of urgent requests still lets a waiting request through.</span></button>
+      </div>
+    </div>
+  </section>
+
+  <div class="pagehead" id="pagehead" hidden><span class="dot" aria-hidden="true"></span><h2 id="pagetitle"></h2></div>
+  <section class="panel" id="picker" aria-label="Choose what to run" hidden>
+    <div class="pick">
+      <label class="f"><span>Requests to run</span>
+        <select id="scenario">
+          <optgroup label="Workloads (generated requests)">
+            <option value="w:sequential">Sequential: neighbouring cylinders</option>
+            <option value="w:random">Random: any cylinder</option>
+            <option value="w:mixed" selected>Mixed: half sequential, half random</option>
+            <option value="w:hotzone">Hot zone: most requests in one area</option>
+            <option value="w:bursty">Bursty: requests arrive in groups</option>
+            <option value="w:starvation">Starvation: SSTF neglects a far request</option>
+          </optgroup>
+          <optgroup label="Hackathon challenges">
+            <option value="e:c1">Challenge 1: baseline paths</option>
+            <option value="e:c2">Challenge 2: short-queue starvation</option>
+            <option value="e:c3">Challenge 3: queue cap of 32</option>
+            <option value="e:c4">Challenge 4: rescue flood</option>
+            <option value="e:c5">Challenge 5: deadlines</option>
+            <option value="e:c5b">Challenge 5: deadlines cannot starve others</option>
+          </optgroup>
+          <optgroup label="Textbook and edge cases">
+            <option value="e:textbook">Textbook queue (head at 53)</option>
+            <option value="e:empty">Edge case: empty queue</option>
+            <option value="e:single">Edge case: one request</option>
+            <option value="e:athead">Edge case: every request at the head</option>
+            <option value="e:bounds">Edge case: first and last cylinder</option>
+            <option value="e:dupes">Edge case: duplicate cylinders</option>
+            <option value="e:edgehead">Edge case: head on the last cylinder</option>
+            <option value="e:late">Edge case: requests arriving mid-sweep</option>
+            <option value="e:invalid">Edge case: invalid input</option>
+          </optgroup>
+        </select></label>
+      <button type="button" class="btn ghost" id="toggleSettings" aria-expanded="false" aria-controls="ctl">Settings</button>
+    </div>
+    <p class="note" id="note"></p>
+    <div id="customBox" hidden>
+      <label class="f"><span>Requests in the queue <i>(cylinders separated by commas; 30@8 = arrives at 8 ms; 2501!100 = deadline 100 ms). You can edit this.</i></span>
+        <textarea id="queue" rows="2" spellcheck="false"></textarea></label>
+      <div class="switches">
+        <label class="f"><span>C-SCAN / C-LOOK sweep</span><select id="cdir"><option value="">Same as start direction</option><option value="1">Up</option><option value="-1">Down</option></select></label>
+        <label class="f"><span>Queue cap <i>(0 = none)</i></span><input id="cap" type="number" min="0" max="2000" step="1"></label>
+        <label class="f"><span>When the queue is full</span><select id="ovf"><option value="defer">Defer: wait outside</option><option value="reject">Reject: refuse it</option></select></label>
+        <label class="f"><span>Deadline jumps in a row</span><input id="dlmax" type="number" min="0" max="999" step="1"></label>
+        <label class="chk"><input id="freeze" type="checkbox"> Freeze the rescue batch</label>
+        <label class="chk"><input id="ret" type="checkbox"> Count the C-SCAN return jump</label>
+      </div>
+    </div>
+    <form id="ctl" class="ctl settings" autocomplete="off" hidden>
+      <select id="wl" hidden aria-hidden="true" tabindex="-1">
+        <option value="sequential">Sequential</option><option value="random">Random</option><option value="mixed">Mixed</option>
+        <option value="hotzone">Hot zone</option><option value="bursty">Bursty</option><option value="starvation">Starvation</option><option value="custom">Custom</option>
+      </select>
+      <select id="edge" hidden aria-hidden="true" tabindex="-1"></select>
+      <label class="f" id="nBox"><span>Requests</span><input id="n" type="number" min="1" max="2000" step="1"></label>
+      <label class="f" id="rateBox"><span>Arrival rate <i>(per second, 0 = all at once)</i></span><input id="rate" type="number" min="0" max="2000" step="10"></label>
+      <label class="f"><span>Cylinders</span><input id="ncyl" type="number" min="2" max="100000" step="1"></label>
+      <label class="f"><span>Head starts at</span><input id="head" type="number" min="0" step="1"></label>
+      <label class="f"><span>Start direction</span>
+        <select id="dir"><option value="1">Up, toward higher</option><option value="-1">Down, toward 0</option></select></label>
+      <label class="f" id="seedBox"><span>Seed</span><input id="seed" type="number" step="1"></label>
+      <button type="button" class="btn ghost" id="reseed">New random set</button>
+      <details class="adv wide" id="adv"><summary>Disk timing and scheduler tuning</summary>
+        <div class="ctl">
+          <label class="f"><span>Settle time per seek (ms)</span><input id="settle" type="number" min="0" step="0.1"></label>
+          <label class="f"><span>Full-stroke seek (ms)</span><input id="stroke" type="number" min="0" step="0.5"></label>
+          <label class="f"><span>Rotation + transfer (ms)</span><input id="rot" type="number" min="0" step="0.1"></label>
+          <label class="f"><span>Busy above avg queue of</span><input id="qbusy" type="number" min="1" step="1"></label>
+          <label class="f"><span>Rescue after (x typical wait)</span><input id="age" type="number" min="0.5" step="0.5"></label>
+          <label class="f"><span>Rescue no sooner than (ms)</span><input id="floor" type="number" min="0" step="10"></label>
+        </div>
+      </details>
+    </form>
+  </section>
+  <div class="err" id="err" role="alert" hidden></div>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button type="button" role="tab" id="tab-sim" aria-selected="true">Live disks</button>
+    <button type="button" role="tab" id="tab-compare" aria-selected="false">Results</button>
+    <button type="button" role="tab" id="tab-starve" aria-selected="false">Starvation</button>
+    <button type="button" role="tab" id="tab-step" aria-selected="false">Step by step</button>
+    <button type="button" role="tab" id="tab-trace" aria-selected="false">Event log</button>
+    <button type="button" role="tab" id="tab-about" aria-selected="false">Help</button>
+  </nav>
+
+  <section id="v-sim" role="tabpanel" aria-labelledby="tab-sim">
+    <div class="panel stepbar">
+      <label class="f"><span>Left drive</span><select id="simA"></select></label>
+      <label class="f"><span>Right drive</span><select id="simB"></select></label>
+      <button type="button" class="btn" id="simPlay">Play</button>
+      <button type="button" class="btn ghost" id="simReset">Restart</button>
+      <button type="button" class="btn ghost" id="simSound" aria-pressed="true">Sound on</button>
+      <label class="f"><span>Speed</span><select id="simSpeed"><option value="20">Slow motion</option><option value="80" selected>Normal</option><option value="300">Fast</option></select></label>
+      <label class="f grow"><span>Simulated time</span><input id="simSeek" type="range" min="0" max="1" step="any" value="0"></label>
+      <div class="simclock" id="simClock" aria-live="off"></div>
+    </div>
+    <div class="panel empty" id="simEmpty" hidden></div>
+    <div id="simBody" style="display:grid;gap:12px;margin-top:12px">
+      <div class="two">
+        <figure class="chart sim" style="margin:0"><header><b id="simAName">FCFS</b></header><canvas id="cvA" role="img" aria-label="Left drive, top view"></canvas><div class="simstat" id="simAStat"></div><div class="simwhy" id="simAWhy"></div><canvas id="trA" role="img" aria-label="Left drive head position over time"></canvas></figure>
+        <figure class="chart sim ours" style="margin:0"><header><b id="simBName">Adaptive</b></header><canvas id="cvB" role="img" aria-label="Right drive, top view"></canvas><div class="simstat" id="simBStat"></div><div class="simwhy" id="simBWhy"></div><canvas id="trB" role="img" aria-label="Right drive head position over time"></canvas></figure>
+      </div>
+      <p class="note">Both drives get the same requests at the same moments; only the scheduling rule differs. Dark dot = waiting, copper = being read, red = waited too long, violet ring = just finished. The strip under each drive shows where the head was over time.</p>
+    </div>
+  </section>
+  <section id="v-compare" role="tabpanel" aria-labelledby="tab-compare" hidden></section>
+  <section id="v-starve" role="tabpanel" aria-labelledby="tab-starve" hidden></section>
+  <section id="v-step" role="tabpanel" aria-labelledby="tab-step" hidden>
+    <div class="panel stepbar">
+      <label class="f"><span>Algorithm</span><select id="salgo"></select></label>
+      <button type="button" class="btn ghost" id="first" aria-label="First step">|&#9664;</button>
+      <button type="button" class="btn ghost" id="prev" aria-label="Previous step">&#9664;</button>
+      <button type="button" class="btn" id="play">Play</button>
+      <button type="button" class="btn ghost" id="next" aria-label="Next step">&#9654;</button>
+      <button type="button" class="btn ghost" id="last" aria-label="Last step">&#9654;|</button>
+      <label class="f"><span>Step</span><input id="sk" type="range" min="0" max="0" value="0"></label>
+      <label class="f"><span>Speed</span><select id="speed"><option value="2">Slow</option><option value="5" selected>Normal</option><option value="15">Fast</option></select></label>
+      <div class="inj">
+        <label class="f"><span>New request at cylinder</span><input id="injc" type="number" min="0" step="1"></label>
+        <button type="button" class="btn ghost" id="inj">Add it now</button>
+      </div>
+    </div>
+    <div id="stepbody"></div>
+  </section>
+  <section id="v-trace" role="tabpanel" aria-labelledby="tab-trace" hidden>
+    <div class="panel stepbar">
+      <label class="f"><span>Algorithm</span><select id="talgo"></select></label>
+      <label class="f"><span>Show</span><select id="tfilter">
+        <option value="all">Every event</option>
+        <option value="key">Rescues, deadlines and queue limits</option>
+        <option value="disp">Dispatches and completions</option>
+      </select></label>
+      <button type="button" class="btn ghost" id="tcopy">Copy trace</button>
+      <span class="simclock" id="tcopied" aria-live="polite"></span>
+    </div>
+    <div id="tracebody" style="display:grid;gap:12px;margin-top:12px"></div>
+  </section>
+  <section id="v-about" role="tabpanel" aria-labelledby="tab-about" hidden></section>
+</div>
+
+<script>
+// OSH022 Adaptive Disk Request Scheduler - scheduling engine.
+// Mirrors adaptive_disk_sched.cpp decision for decision (same tie-breaks, same
+// swap-remove queue, same floating-point expressions), so both give identical results.
+(function (root) {
+  "use strict";
+
+  const ALGOS = ["FCFS", "SSTF", "SCAN", "C-SCAN", "LOOK", "C-LOOK", "ADAPTIVE"];
+  const MODES = ["SSTF", "LOOK", "CLUSTER", "RESCUE", "DEADLINE"]; // adaptive modes (first four match the C++ enum)
+
+  const DEFAULTS = {
+    ncyl: 200, head: 53, dir: +1,
+    settle: 0.8, fullStroke: 14, rot: 4.2, perCyl: null, // perCyl derived from fullStroke if null
+    alphaQ: 0.2, alphaW: 0.1, qBusy: 4.0, hyst: 0.25,
+    zoneHalf: 0.05, zoneFrac: 0.70, ageFactor: 4.0, ageFloor: 80.0,
+    countReturn: true,  // count the C-SCAN / C-LOOK return jump in head movement
+    starveMs: null,     // starvation threshold for reporting; null = auto
+    cdir: null,         // C-SCAN / C-LOOK sweep direction; null = same as dir
+    // ---- live-challenge extensions (all off by default, so default runs match the C++ engine exactly)
+    queueCap: 0,        // C3: max requests inside the scheduler queue (0 = unlimited)
+    overflow: "defer",  // C3: what happens to an arrival when the queue is full: "defer" or "reject"
+    freezeRescue: false,// C4: a rescue may only serve requests already on its path when it began
+    dlMaxInRow: 3,      // C5: deadline jumps allowed in a row while another request is starving
+    forceRescue: -1,    // test harness: start with a rescue already active for this request id
+    beforeDispatch: null, afterComplete: null, // test harness: inject requests (return [{cyl, dl}])
+  };
+
+  function makeCfg(c) {
+    const cfg = Object.assign({}, DEFAULTS, c || {});
+    if (cfg.perCyl == null) cfg.perCyl = cfg.ncyl > 1 ? cfg.fullStroke / (cfg.ncyl - 1) : 0;
+    return cfg;
+  }
+
+  // ------------------------------------------------------------ primitives
+  function pickOldest(p) {
+    let b = 0;
+    for (let i = 1; i < p.length; i++)
+      if (p[i].arr < p[b].arr || (p[i].arr === p[b].arr && p[i].id < p[b].id)) b = i;
+    return b;
+  }
+  function pickNearest(p, head) {
+    let b = 0;
+    for (let i = 1; i < p.length; i++) {
+      const di = Math.abs(p[i].cyl - head), db = Math.abs(p[b].cyl - head);
+      if (di < db || (di === db && p[i].arr < p[b].arr)) b = i;
+    }
+    return b;
+  }
+  function nearestInDir(p, head, dir) {
+    let b = -1;
+    for (let i = 0; i < p.length; i++) {
+      const off = (p[i].cyl - head) * dir;
+      if (off < 0) continue;
+      const ob = b < 0 ? 0 : (p[b].cyl - head) * dir;
+      if (b < 0 || off < ob || (off === ob && p[i].arr < p[b].arr)) b = i;
+    }
+    return b;
+  }
+  function nearestInDirIn(p, head, dir, set) {
+    let b = -1;
+    for (let i = 0; i < p.length; i++) {
+      if (!set.has(p[i].id)) continue;
+      const off = (p[i].cyl - head) * dir;
+      if (off < 0) continue;
+      const ob = b < 0 ? 0 : (p[b].cyl - head) * dir;
+      if (b < 0 || off < ob || (off === ob && p[i].arr < p[b].arr)) b = i;
+    }
+    return b;
+  }
+  function pickLowest(p) { let b = 0; for (let i = 1; i < p.length; i++) if (p[i].cyl < p[b].cyl) b = i; return b; }
+  function pickHighest(p) { let b = 0; for (let i = 1; i < p.length; i++) if (p[i].cyl > p[b].cyl) b = i; return b; }
+  const word = (d) => (d > 0 ? "up" : "down");
+
+  // ------------------------------------------------------------ scheduler
+  function Scheduler(algo, cfg) {
+    this.algo = algo; this.cfg = cfg; this.dir = cfg.dir;
+    this.qe = 0; this.we = 0; this.level = 0; this.rescueId = -1; this.lastMode = -1;
+    this.modeUse = [0, 0, 0, 0, 0]; this.rescues = 0; this.switches = 0;
+    this.batch = null; this.rescueLen = 0; this.dlRun = 0;
+    this.forced = algo === "ADAPTIVE" && cfg.forceRescue >= 0;
+    if (this.forced) this.rescueId = cfg.forceRescue;
+  }
+  Scheduler.prototype.onComplete = function (resp) {
+    const a = this.cfg.alphaW;
+    this.we = this.we === 0 ? resp : (1 - a) * this.we + a * resp;
+  };
+  Scheduler.prototype.look = function (p, head) {
+    let i = nearestInDir(p, head, this.dir), rev = false;
+    if (i < 0) { this.dir = -this.dir; i = nearestInDir(p, head, this.dir); rev = true; }
+    return { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl],
+      why: rev ? `Nothing left going ${word(-this.dir)}; reverse and sweep ${word(this.dir)}` : `Next request going ${word(this.dir)}` };
+  };
+  Scheduler.prototype.scan = function (p, head) {
+    let i = nearestInDir(p, head, this.dir);
+    if (i >= 0) return { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl], why: `Next request going ${word(this.dir)}` };
+    const edge = this.dir > 0 ? this.cfg.ncyl - 1 : 0;
+    this.dir = -this.dir;
+    i = nearestInDir(p, head, this.dir);
+    return { idx: i, travel: Math.abs(edge - head) + Math.abs(edge - p[i].cyl), path: [edge, p[i].cyl],
+      why: `Nothing ahead; run to the edge at ${edge}, then sweep ${word(this.dir)}` };
+  };
+  Scheduler.prototype.clook = function (p, head) {
+    const d = this.cfg.cdir != null ? this.cfg.cdir : this.cfg.dir;
+    let i = nearestInDir(p, head, d);
+    if (i >= 0) return { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl], why: `Next request going ${word(d)}` };
+    i = d > 0 ? pickLowest(p) : pickHighest(p);
+    const t = Math.abs(head - p[i].cyl);
+    return { idx: i, travel: t, uncounted: t, jumpFrom: 0, path: [p[i].cyl],
+      why: `End of the sweep; jump back to ${d > 0 ? "the lowest" : "the highest"} pending request` };
+  };
+  Scheduler.prototype.cscan = function (p, head) {
+    const d = this.cfg.cdir != null ? this.cfg.cdir : this.cfg.dir, top = this.cfg.ncyl - 1;
+    let i = nearestInDir(p, head, d);
+    if (i >= 0) return { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl], why: `Next request going ${word(d)}` };
+    i = d > 0 ? pickLowest(p) : pickHighest(p);
+    const c = p[i].cyl;
+    const travel = d > 0 ? (top - head) + top + c : head + top + (top - c);
+    return { idx: i, travel, uncounted: top, jumpFrom: 1, path: d > 0 ? [top, 0, c] : [0, top, c],
+      why: `Nothing ahead; run to ${d > 0 ? top : 0}, return to ${d > 0 ? 0 : top}, sweep ${word(d)} again` };
+  };
+  Scheduler.prototype.clustered = function (p) {
+    if (p.length < 4) return null;
+    const c = p.map((r) => r.cyl).sort((a, b) => a - b);
+    const med = c[Math.floor(c.length / 2)], win = Math.floor(this.cfg.zoneHalf * this.cfg.ncyl);
+    let inn = 0;
+    for (const r of p) if (Math.abs(r.cyl - med) <= win) inn++;
+    return { ok: inn >= this.cfg.zoneFrac * p.length, med, win, inn };
+  };
+  // documented disk cost of moving from cylinder a to b and reading one request
+  Scheduler.prototype.cost = function (a, b) {
+    const d = Math.abs(a - b);
+    return (d > 0 ? this.cfg.settle + this.cfg.perCyl * d : 0) + this.cfg.rot;
+  };
+  // C5: a deadline request is urgent when even one other request served first would make it late.
+  // Among urgent requests pick the earliest due time; ties by arrival, then id (deterministic).
+  Scheduler.prototype.deadlinePick = function (p, head, now) {
+    let best = null;
+    for (let i = 0; i < p.length; i++) {
+      const r = p[i];
+      if (r.dl == null || p.length < 2) continue;
+      const due = r.arr + r.dl;
+      if (now > due) continue; // already missed: it loses priority, the starvation guard still protects it
+      let detour = Infinity;
+      for (let j = 0; j < p.length; j++) if (j !== i) detour = Math.min(detour, this.cost(head, p[j].cyl) + this.cost(p[j].cyl, r.cyl));
+      if (now + detour <= due) continue;
+      const b = best && p[best.i];
+      if (!best || due < best.due || (due === best.due && (r.arr < b.arr || (r.arr === b.arr && r.id < b.id))))
+        best = { i, due, finNow: now + this.cost(head, r.cyl), finDetour: now + detour };
+    }
+    return best;
+  };
+  Scheduler.prototype.adaptive = function (p, head, now) {
+    const cfg = this.cfg;
+    // 1. MONITOR
+    this.qe = (1 - cfg.alphaQ) * this.qe + cfg.alphaQ * p.length;
+    // 2. CLASSIFY with hysteresis
+    if (this.level === 0 && this.qe > cfg.qBusy * (1 + cfg.hyst)) this.level = 1;
+    else if (this.level === 1 && this.qe < cfg.qBusy * (1 - cfg.hyst)) this.level = 0;
+    // 3. STARVATION GUARD (runs whatever the load level, so a short queue cannot switch it off)
+    let tgt = -1, fresh = false;
+    if (this.rescueId >= 0) for (let i = 0; i < p.length; i++) if (p[i].id === this.rescueId) tgt = i;
+    const limit = Math.max(cfg.ageFloor, cfg.ageFactor * this.we);
+    let forcedNow = false;
+    if (tgt >= 0 && this.forced) { fresh = true; forcedNow = true; this.forced = false; this.rescues++; }
+    if (tgt < 0) {
+      this.rescueId = -1; this.batch = null;
+      const o = pickOldest(p);
+      if (now - p[o].arr > limit) { tgt = o; this.rescueId = p[o].id; this.rescues++; fresh = true; }
+    }
+    let rescueStart = null;
+    if (fresh) {
+      const tc = p[tgt].cyl, d = tc === head ? this.dir : tc > head ? +1 : -1;
+      this.batch = cfg.freezeRescue ? new Set(p.filter((r) => (r.cyl - head) * d >= 0 && (tc - r.cyl) * d >= 0).map((r) => r.id)) : null;
+      this.rescueLen = 0;
+      rescueStart = { target: p[tgt].id, cyl: tc, waited: now - p[tgt].arr, limit, batch: this.batch ? this.batch.size : null, forced: forcedNow };
+    }
+    // 0. DEADLINE OVERRIDE, checked before the guard but bounded while someone is starving
+    const dlc = p.some((r) => r.dl != null) ? this.deadlinePick(p, head, now) : null;
+    const dlBlocked = !!dlc && tgt >= 0 && this.dlRun >= cfg.dlMaxInRow;
+    let mode, pk, why;
+    const qtxt = `avg queue ${this.qe.toFixed(1)}`;
+    if (dlc && !dlBlocked) {
+      mode = 4;
+      if (tgt >= 0) this.dlRun++; else this.dlRun = 0;
+      const r = p[dlc.i];
+      pk = { idx: dlc.i, travel: Math.abs(r.cyl - head), path: [r.cyl], deadline: true };
+      why = `Deadline override: #${r.id} (cyl ${r.cyl}) is due at ${dlc.due.toFixed(1)} ms. With any other request first it would finish at ${dlc.finDetour.toFixed(1)} ms or later; served now it finishes at ${dlc.finNow.toFixed(1)} ms` +
+        (dlc.finNow > dlc.due ? `. It cannot be met even now, so going first keeps the miss as small as possible` : "") +
+        (tgt >= 0 ? `. Request #${p[tgt].id} is starving: ${cfg.dlMaxInRow - this.dlRun} more deadline jump(s) allowed before its rescue gets a turn` : "");
+    } else if (tgt >= 0) {
+      mode = 3;
+      this.dlRun = 0;
+      if (p[tgt].cyl !== head) this.dir = p[tgt].cyl > head ? +1 : -1;
+      let i = this.batch ? nearestInDirIn(p, head, this.dir, this.batch) : nearestInDir(p, head, this.dir);
+      if (i < 0) i = tgt;
+      this.rescueLen++;
+      pk = { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl], target: p[tgt].id };
+      const pre = dlBlocked ? `${cfg.dlMaxInRow} deadline jumps in a row already; the starving request gets this turn. ` : "";
+      if (fresh) why = pre + (forcedNow ? `Rescue of #${p[tgt].id} (cyl ${p[tgt].cyl}) is already active (test setup). Sweep ${word(this.dir)} toward it` : `Request #${p[tgt].id} (cyl ${p[tgt].cyl}) has waited ${(now - p[tgt].arr).toFixed(0)} ms, over the ${limit.toFixed(0)} ms limit. Sweep ${word(this.dir)} toward it`) +
+        (this.batch ? `. Rescue batch frozen: only the ${this.batch.size} request(s) on the path right now may go first` : "");
+      else if (this.batch) {
+        const left = p.filter((r) => this.batch.has(r.id)).length;
+        const skip = p.filter((r) => !this.batch.has(r.id) && (r.cyl - head) * this.dir >= 0 && (p[tgt].cyl - r.cyl) * this.dir >= 0).length;
+        why = pre + `Rescue sweep ${word(this.dir)} toward #${p[tgt].id} (cyl ${p[tgt].cyl}) inside the frozen batch (${left} left)` + (skip ? `; ${skip} newer request(s) on the path must wait` : "");
+      } else why = pre + `Rescue sweep ${word(this.dir)} toward #${p[tgt].id} (cyl ${p[tgt].cyl}), serving requests on the way`;
+    } else if (this.level === 0) {
+      mode = 0; this.dlRun = 0;
+      const i = pickNearest(p, head);
+      pk = { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl] };
+      why = `Light load (${qtxt}): nearest request first`;
+    } else {
+      this.dlRun = 0;
+      const cl = this.clustered(p);
+      if (cl && cl.ok) {
+        mode = 2;
+        const i = pickNearest(p, head);
+        pk = { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl] };
+        why = `Busy and clustered: ${cl.inn} of ${p.length} requests within ${cl.win} cyl of ${cl.med}. Stay in the hot zone`;
+      } else {
+        mode = 1;
+        pk = this.look(p, head);
+        why = `Busy and spread out (${qtxt}): ${pk.why.charAt(0).toLowerCase() + pk.why.slice(1)}`;
+      }
+    }
+    if (mode !== 1 && p[pk.idx].cyl !== head) this.dir = p[pk.idx].cyl > head ? +1 : -1;
+    if (p[pk.idx].id === this.rescueId) {
+      pk.rescueEnd = { target: this.rescueId, dispatches: this.rescueLen + (mode === 3 ? 0 : 1), batch: this.batch ? this.batch.size : null };
+      this.rescueId = -1; this.batch = null;
+    }
+    if (this.lastMode >= 0 && mode !== this.lastMode) this.switches++;
+    this.lastMode = mode;
+    this.modeUse[mode]++;
+    pk.mode = mode; pk.why = why; pk.limit = limit; pk.qe = this.qe; pk.level = this.level; pk.rescueStart = rescueStart;
+    return pk;
+  };
+  Scheduler.prototype.pick = function (p, head, now) {
+    switch (this.algo) {
+      case "FCFS": { const i = pickOldest(p); return { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl], why: `Oldest request first (#${p[i].id}, arrived ${p[i].arr.toFixed(1)} ms)` }; }
+      case "SSTF": { const i = pickNearest(p, head); return { idx: i, travel: Math.abs(p[i].cyl - head), path: [p[i].cyl], why: `Nearest to the head: ${Math.abs(p[i].cyl - head)} cylinders away` }; }
+      case "SCAN": return this.scan(p, head);
+      case "C-SCAN": return this.cscan(p, head);
+      case "LOOK": return this.look(p, head);
+      case "C-LOOK": return this.clook(p, head);
+      default: return this.adaptive(p, head, now);
+    }
+  };
+
+  // ------------------------------------------------------------ simulation
+  function simulate(reqsIn, algo, cIn) {
+    const cfg = makeCfg(cIn);
+    const reqs = reqsIn.map((r, i) => ({ id: r.id != null ? r.id : i, arr: +r.arr || 0, cyl: r.cyl, dl: r.dl != null ? +r.dl : null, injected: !!r.injected }))
+      .sort((a, b) => a.arr - b.arr || a.id - b.id);
+    const all = reqs.slice();
+    const s = new Scheduler(algo, cfg);
+    const pending = [], steps = [], backlog = [], ev = [];
+    let head = cfg.head, now = 0, next = 0, served = 0, rejected = 0, phys = 0, counted = 0, maxBacklog = 0, seq = 0;
+    let nextId = reqs.reduce((m, r) => Math.max(m, r.id), -1) + 1;
+    const log = (t, type, r, info) => ev.push({ t, seq: seq++, type, id: r ? r.id : -1, cyl: r ? r.cyl : -1, info: info || "" });
+    const admit = (r) => {
+      if (!r.deferred) log(r.arr, "ARRIVE", r, (r.injected ? "injected" : "") + (r.dl != null ? `${r.injected ? ", " : ""}deadline ${r.dl} ms (due ${(r.arr + r.dl).toFixed(1)} ms)` : ""));
+      if (cfg.queueCap > 0 && pending.length >= cfg.queueCap) {
+        if (cfg.overflow === "reject") { r.rejected = true; rejected++; log(now, "REJECT", r, `queue full (${pending.length}/${cfg.queueCap}); request refused, caller must retry`); return; }
+        if (!r.deferred) { r.deferred = true; backlog.push(r); maxBacklog = Math.max(maxBacklog, backlog.length); log(now, "DEFER", r, `queue full (${pending.length}/${cfg.queueCap}); waiting outside, ${backlog.length} in line`); }
+        return;
+      }
+      r.admitted = now;
+      if (r.deferred) log(now, "ADMIT", r, `entered the queue after ${(now - r.arr).toFixed(1)} ms outside`);
+      pending.push(r);
+    };
+    const inject = (list) => {
+      for (const x of list || []) { const r = { id: nextId++, arr: now, cyl: x.cyl, dl: x.dl != null ? x.dl : null, injected: true }; all.push(r); admit(r); }
+    };
+    const ctx = () => ({ now, head, served, dispatched: steps.length, algo, pending: pending.length, rescuing: s.rescueId >= 0 });
+    while (served + rejected < all.length) {
+      while (next < reqs.length && reqs[next].arr <= now) admit(reqs[next++]);
+      if (!pending.length) {
+        if (backlog.length) { admit(backlog.shift()); continue; }
+        if (next < reqs.length) { now = reqs[next].arr; continue; }
+        break;
+      }
+      if (cfg.beforeDispatch) inject(cfg.beforeDispatch(ctx()));
+      const qlen = pending.length;
+      const pk = s.pick(pending, head, now);
+      const r = pending[pk.idx];
+      const from = head;
+      const cnt = pk.travel - (cfg.countReturn ? 0 : pk.uncounted || 0);
+      phys += pk.travel; counted += cnt;
+      r.start = now; r.step = steps.length;
+      if (pk.rescueStart) log(now, "RESCUE START", { id: pk.rescueStart.target, cyl: pk.rescueStart.cyl }, (pk.rescueStart.forced ? "rescue active from the start (test setup)" : `waited ${pk.rescueStart.waited.toFixed(1)} ms > limit ${pk.rescueStart.limit.toFixed(1)} ms`) + (pk.rescueStart.batch != null ? `; batch frozen at ${pk.rescueStart.batch} request(s)` : ""));
+      log(now, "DISPATCH", r, `${pk.mode != null && pk.mode >= 0 ? MODES[pk.mode] + ": " : ""}${pk.why}; queue ${qlen}`);
+      now += (pk.travel > 0 ? cfg.settle + cfg.perCyl * pk.travel : 0.0) + cfg.rot;
+      r.fin = now;
+      steps.push({ k: steps.length, t: r.start, fin: now, id: r.id, cyl: r.cyl, from, path: pk.path,
+        jumpFrom: pk.jumpFrom, travel: pk.travel, counted: cnt, qlen, why: pk.why,
+        mode: pk.mode != null ? pk.mode : -1, limit: pk.limit, qe: pk.qe, level: pk.level, dir: s.dir,
+        target: pk.target != null ? pk.target : -1 });
+      head = r.cyl;
+      let fin = `waited ${(r.start - r.arr).toFixed(1)} ms, done ${(r.fin - r.arr).toFixed(1)} ms after arrival`;
+      if (r.dl != null) { const due = r.arr + r.dl; r.late = Math.max(0, r.fin - due); fin += r.fin <= due ? `; deadline met (${(due - r.fin).toFixed(1)} ms to spare)` : `; deadline MISSED by ${(r.fin - due).toFixed(1)} ms`; }
+      log(now, "COMPLETE", r, fin);
+      if (pk.rescueEnd) log(now, "RESCUE END", r, `target served after ${pk.rescueEnd.dispatches} dispatch(es)` + (pk.rescueEnd.batch != null ? ` (bound: frozen batch of ${pk.rescueEnd.batch})` : ""));
+      s.onComplete(r.fin - r.arr);
+      pending[pk.idx] = pending[pending.length - 1];
+      pending.pop();
+      served++;
+      while (backlog.length && pending.length < cfg.queueCap) admit(backlog.shift());
+      if (cfg.afterComplete) inject(cfg.afterComplete(ctx()));
+    }
+    ev.sort((a, b) => a.t - b.t || a.seq - b.seq);
+    const out = finish(all.filter((q) => !q.rejected), steps, cfg, s, phys, counted, now);
+    const deferred = all.filter((q) => q.deferred);
+    const dls = all.filter((q) => q.dl != null && !q.rejected);
+    out.events = ev;
+    out.acct = {
+      submitted: all.length, served, rejected, deferred: deferred.length, maxBacklog,
+      maxOutside: deferred.reduce((m, q) => Math.max(m, (q.admitted != null ? q.admitted : now) - q.arr), 0),
+      dlTotal: dls.length, dlMet: dls.filter((q) => q.fin <= q.arr + q.dl).length,
+      maxLate: dls.reduce((m, q) => Math.max(m, q.late || 0), 0),
+    };
+    return out;
+  }
+
+  function finish(reqs, steps, cfg, s, phys, counted, end) {
+    const n = reqs.length, m = { n, phys, move: counted };
+    if (!n) return { reqs, steps, cfg, m: Object.assign(m, { avgSeek: 0, meanWait: 0, maxWait: 0, sdWait: 0, meanResp: 0, maxResp: 0, p95Resp: 0, thr: 0, jain: 1, maxOvertake: 0, starved: 0 }), modeUse: s.modeUse, rescues: 0, switches: 0 };
+    for (const r of reqs) { r.wait = r.start - r.arr; r.resp = r.fin - r.arr; }
+    // overtakes: later arrivals served before this request
+    const byStep = reqs.slice().sort((a, b) => a.step - b.step);
+    for (const r of reqs) r.overtaken = 0;
+    for (let i = 0; i < byStep.length; i++)
+      for (let j = i + 1; j < byStep.length; j++)
+        if (byStep[i].arr > byStep[j].arr) byStep[j].overtaken++;
+    const w = reqs.map((r) => r.wait), rs = reqs.map((r) => r.resp);
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    m.avgSeek = counted / n;
+    m.meanWait = mean(w); m.maxWait = Math.max(...w);
+    m.sdWait = Math.sqrt(mean(w.map((x) => (x - m.meanWait) ** 2)));
+    m.meanResp = mean(rs); m.maxResp = Math.max(...rs);
+    const sr = rs.slice().sort((a, b) => a - b);
+    m.p95Resp = sr[Math.floor(0.95 * (n - 1))];
+    const first = Math.min(...reqs.map((r) => r.arr));
+    const span = end - first;
+    m.thr = span > 0 ? (n / span) * 1000 : 0;
+    const sq = rs.reduce((x, y) => x + y * y, 0);
+    m.jain = sq > 0 ? (rs.reduce((x, y) => x + y, 0) ** 2) / (n * sq) : 1;
+    m.maxOvertake = Math.max(...reqs.map((r) => r.overtaken));
+    return { reqs, steps, cfg, m, modeUse: s.modeUse, rescues: s.rescues, switches: s.switches };
+  }
+
+  function runAll(reqs, cfg) {
+    const out = {};
+    for (const a of ALGOS) out[a] = simulate(reqs, a, cfg);
+    // starvation threshold: user value, else 3x the mean wait of the fairest-in-order policy (FCFS) capped sensibly
+    const auto = Math.max(100, 5 * Math.min(...ALGOS.map((a) => out[a].m.meanWait || 0).filter((x) => x > 0).concat([20])));
+    const thr = cfg && cfg.starveMs ? cfg.starveMs : auto;
+    for (const a of ALGOS) out[a].m.starved = out[a].reqs.filter((r) => r.wait > thr).length;
+    out.starveMs = thr;
+    return out;
+  }
+
+  // ------------------------------------------------------------ workloads
+  function rng(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const WORKLOADS = {
+    sequential: "Sequential", random: "Random", mixed: "Mixed",
+    hotzone: "Hot zone", bursty: "Bursty", starvation: "Starvation", custom: "Custom",
+  };
+
+  // opts: { kind, n, ncyl, rate (req/s, 0 = all arrive at once), seed }
+  function generate(opts) {
+    const { kind, n, ncyl } = opts, R = rng(opts.seed || 1);
+    const ri = (lo, hi) => lo + Math.floor(R() * (hi - lo + 1));
+    const top = ncyl - 1;
+    let run = null; // sequential stream state
+    const seqNext = () => {
+      if (!run || run.left <= 0 || run.at > top) run = { at: ri(0, top), left: ri(6, 16), step: R() < 0.8 ? 1 : 2 };
+      const c = run.at; run.at += run.step; run.left--; return Math.min(c, top);
+    };
+    const cyl = () => {
+      switch (kind) {
+        case "sequential": return seqNext();
+        case "mixed": return R() < 0.5 ? seqNext() : ri(0, top);
+        case "hotzone": return R() < 0.85 ? ri(Math.floor(0.40 * ncyl), Math.floor(0.48 * ncyl)) : ri(0, top);
+        case "starvation": return R() < 0.05 ? ri(Math.floor(0.90 * ncyl), top) : ri(Math.floor(0.20 * ncyl), Math.floor(0.35 * ncyl));
+        default: return ri(0, top);
+      }
+    };
+    const out = [];
+    let t = 0;
+    if (kind === "bursty") {
+      const burst = 10, gap = opts.rate > 0 ? (burst / opts.rate) * 1000 : 0;
+      for (let i = 0; i < n; i++) {
+        if (i > 0 && i % burst === 0) t += gap;
+        out.push({ id: i, arr: opts.rate > 0 ? +(t + R() * 2).toFixed(3) : 0, cyl: ri(0, top) });
+      }
+      return out;
+    }
+    for (let i = 0; i < n; i++) {
+      if (opts.rate > 0) t += (-Math.log(1 - R()) / opts.rate) * 1000;
+      out.push({ id: i, arr: opts.rate > 0 ? +t.toFixed(3) : 0, cyl: cyl() });
+    }
+    return out;
+  }
+
+  // "98, 183, 37", "98@0 183@4.5" (cylinder@arrival-ms) or "2501!100" (deadline 100 ms after arrival). Returns {reqs} or {error}.
+  function parseCustom(text, ncyl) {
+    const toks = String(text).split(/[\s,;]+/).filter(Boolean);
+    const reqs = [], bad = [], out = [];
+    toks.forEach((tok, i) => {
+      const m = /^(-?\d+(?:\.\d+)?)(?:@(\d+(?:\.\d+)?))?(?:!(\d+(?:\.\d+)?))?$/.exec(tok);
+      if (!m || !Number.isInteger(+m[1])) { bad.push(tok); return; }
+      const c = +m[1];
+      if (c < 0 || c > ncyl - 1) { out.push(c); return; }
+      reqs.push({ id: reqs.length, cyl: c, arr: m[2] ? +m[2] : 0, dl: m[3] ? +m[3] : null });
+    });
+    if (bad.length) return { error: `Not a whole cylinder number: ${bad.slice(0, 5).join(", ")}. Use numbers like 98, 183, 98@12 (arrives at 12 ms) or 98!50 (deadline 50 ms).` };
+    if (out.length) return { error: `Outside the disk (0 to ${ncyl - 1}): ${out.slice(0, 5).join(", ")}. Change the disk size or remove these.` };
+    return { reqs };
+  }
+
+  const api = { ALGOS, MODES, DEFAULTS, WORKLOADS, makeCfg, simulate, runAll, generate, parseCustom, rng };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.DiskEngine = api;
+})(this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  const E = window.DiskEngine, ALGOS = E.ALGOS;
+  const NAME = (a) => (a === "ADAPTIVE" ? "Adaptive" : a);
+  const MODE = ["SSTF", "LOOK", "Cluster-SSTF", "Rescue sweep", "Deadline"];
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const f1 = (v) => (Math.round(v * 10) / 10).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const f0 = (v) => Math.round(v).toLocaleString("en-US");
+
+  const WL = {
+    sequential: { n: 40, rate: 0, ncyl: 200, head: 53, dir: 1, seed: 7, note: "Sequential: runs of neighbouring cylinders, like files being read start to end. Every algorithm does well; FCFS is close to SSTF." },
+    random: { n: 40, rate: 0, ncyl: 200, head: 53, dir: 1, seed: 7, note: "Random: every cylinder equally likely. FCFS zig-zags across the disk; the others cut head movement sharply." },
+    mixed: { n: 80, rate: 150, ncyl: 200, head: 53, dir: 1, seed: 7, note: "Mixed: half the requests continue a sequential stream, half are random, arriving at 150 per second." },
+    hotzone: { n: 150, rate: 160, ncyl: 200, head: 53, dir: 1, seed: 7, note: "Hot zone: 85% of requests fall on cylinders 80 to 96 (a busy file); the rest land anywhere." },
+    bursty: { n: 100, rate: 150, ncyl: 200, head: 53, dir: 1, seed: 7, note: "Bursty: requests arrive in bursts of 10 at once." },
+    starvation: { n: 400, rate: 170, ncyl: 200, head: 100, dir: 1, seed: 8, note: "Starvation scenario: a busy stream on cylinders 40 to 70 keeps the head busy while a few requests wait far away at 180 to 199. Open the Starvation tab." },
+    custom: { ncyl: 200, head: 53, dir: 1, note: "Custom queue: type any list of cylinders, or pick a preset including the edge cases." },
+  };
+  const DOCSTROKE = 13.9972; // 0.0028 ms per cylinder on 5,000 cylinders, the cost in the design document
+  const EDGE = {
+    c1: { label: "Challenge 1: hand-worked baseline paths", text: "98, 183, 37, 122, 14, 124, 65, 67", head: 53, dir: -1, cdir: "1", ret: true, tab: "compare",
+      note: "Challenge 1: disk 0 to 199, head at 53, all requests arrive at 0. SCAN moves down, C-SCAN moves up and its return jump is counted. Hand-worked answers: FCFS 640, SSTF 236, SCAN 236, C-SCAN 382. See the Service order table on the Results tab." },
+    c2: { label: "Challenge 2: short-queue starvation", text: "4900, 1100", ncyl: 5000, stroke: DOCSTROKE, head: 1100, dir: 1, freeze: true, tab: "trace",
+      hooks: { afterComplete: (c) => (c.served <= 30 ? [{ cyl: 1100 }] : []) },
+      note: "Challenge 2: request #0 waits far away at 4900. After each of the first 30 completions a new request arrives at 1100, so the queue never holds more than 2 and the average stays low. Untick 'Freeze the rescue batch' to see the far request starve under the old rescue." },
+    c3: { label: "Challenge 3: overload queue cap", text: Array.from({ length: 64 }, (_, i) => (i * 73) % 5000).join(", "), ncyl: 5000, stroke: DOCSTROKE, head: 2500, dir: 1, cap: 32, ovf: "defer", tab: "trace",
+      note: "Challenge 3: 64 requests arrive at once, cylinders (i x 73) mod 5000, but the queue holds 32. Switch 'When the queue is full' between Defer and Reject; submitted always equals served plus rejected." },
+    c4: { label: "Challenge 4: rescue flood", text: "4900", ncyl: 5000, stroke: DOCSTROKE, head: 1000, dir: 1, freeze: true, force: 0, tab: "trace",
+      hooks: { beforeDispatch: (c) => (c.dispatched < 20 ? [{ cyl: 1100 + 100 * c.dispatched }] : []) },
+      note: "Challenge 4: a rescue toward #0 at 4900 is already active. Before each dispatch a new request appears on the path at 1100, 1200 ... 3000. With the batch frozen the rescue ends after 2 dispatches; untick it and the rescue stretches to 21." },
+    c5: { label: "Challenge 5: deadline override", text: "2501!100, 4900!10", ncyl: 5000, stroke: DOCSTROKE, head: 2500, dir: 1, tab: "trace",
+      note: "Challenge 5: R1 (#0) at 2501 is due 100 ms after arrival, R2 (#1) at 4900 is due after 10 ms; both arrive at 0. Disk cost: 0.8 ms + 0.0028 ms per cylinder of seek, plus 4.2 ms to read." },
+    c5b: { label: "Challenge 5: deadlines cannot starve other requests", text: "4900, 1100!12", ncyl: 5000, stroke: DOCSTROKE, head: 1100, dir: 1, freeze: true, dlmax: 3, tab: "trace",
+      hooks: { afterComplete: (c) => (c.served <= 60 ? [{ cyl: 1100, dl: 12 }] : []) },
+      note: "Challenge 5, starvation check: urgent deadline requests keep arriving at 1100 while #0 waits at 4900. Once #0 is starving, at most 3 deadline jumps in a row are allowed. Set that number to 999 to watch #0 starve." },
+    textbook: { label: "Textbook queue, head at 53", text: "98, 183, 37, 122, 14, 124, 65, 67", head: 53, dir: 1 },
+    empty: { label: "Edge case: empty queue", text: "", head: 53, dir: 1 },
+    single: { label: "Edge case: one request", text: "120", head: 53, dir: 1 },
+    athead: { label: "Edge case: every request at the head", text: "53, 53, 53, 53", head: 53, dir: 1 },
+    bounds: { label: "Edge case: first and last cylinder", text: "0, 199, 0, 199, 100", head: 100, dir: 1 },
+    dupes: { label: "Edge case: duplicate cylinders", text: "90, 90, 10, 90, 150, 10, 150", head: 53, dir: 1 },
+    edgehead: { label: "Edge case: head on the last cylinder, moving up", text: "20, 150, 199, 75", head: 199, dir: 1 },
+    late: { label: "Edge case: requests arriving mid-sweep", text: "10@0, 150@0, 180@0, 30@8, 175@15, 5@30", head: 100, dir: 1 },
+    invalid: { label: "Edge case: invalid input", text: "12, abc, 250, 7.5", head: 53, dir: 1 },
+  };
+
+  const st = { hooks: null, force: -1, tab: "welcome", out: null, reqs: [], cfg: null, injected: [], k: 0, salgo: "ADAPTIVE", timer: null };
+  const ids = ["wl", "n", "rate", "ncyl", "head", "dir", "seed", "queue", "edge", "settle", "stroke", "rot", "qbusy", "age", "floor", "ret", "injc", "cdir", "cap", "ovf", "dlmax", "freeze"];
+  const el = Object.fromEntries(ids.map((i) => [i, $("#" + i)]));
+
+  // ------------------------------------------------------------ setup
+  el.edge.innerHTML = Object.entries(EDGE).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join("");
+  $("#salgo").innerHTML = ALGOS.map((a) => `<option value="${a}"${a === "ADAPTIVE" ? " selected" : ""}>${NAME(a)}</option>`).join("");
+  const D = E.DEFAULTS;
+  el.settle.value = D.settle; el.stroke.value = D.fullStroke; el.rot.value = D.rot;
+  el.qbusy.value = D.qBusy; el.age.value = D.ageFactor; el.floor.value = D.ageFloor; el.ret.checked = D.countReturn;
+  $("#talgo").innerHTML = ALGOS.map((a) => `<option value="${a}"${a === "ADAPTIVE" ? " selected" : ""}>${NAME(a)}</option>`).join("");
+  function resetExtras() {
+    el.cdir.value = ""; el.cap.value = 0; el.ovf.value = "defer"; el.dlmax.value = D.dlMaxInRow; el.freeze.checked = false;
+    el.stroke.value = D.fullStroke; el.ret.checked = D.countReturn; st.hooks = null; st.force = -1;
+  }
+  resetExtras();
+
+  function applyWorkload(kind) {
+    const w = WL[kind];
+    for (const k of ["n", "rate", "ncyl", "head", "seed"]) if (w[k] != null) el[k].value = w[k];
+    if (w.dir != null) el.dir.value = String(w.dir);
+    const custom = kind === "custom";
+    resetExtras();
+    $("#customBox").hidden = !custom;
+    for (const b of ["#nBox", "#rateBox", "#seedBox", "#reseed"]) $(b).hidden = custom;
+    if (custom) applyEdge(el.edge.value, false);
+  }
+  function applyEdge(key, rerun) {
+    const p = EDGE[key];
+    resetExtras();
+    el.queue.value = p.text; el.head.value = p.head; el.dir.value = String(p.dir); el.ncyl.value = p.ncyl || 200;
+    if (p.stroke != null) el.stroke.value = p.stroke;
+    if (p.cdir != null) el.cdir.value = p.cdir;
+    if (p.cap) el.cap.value = p.cap;
+    if (p.ovf) el.ovf.value = p.ovf;
+    if (p.freeze) el.freeze.checked = true;
+    if (p.dlmax != null) el.dlmax.value = p.dlmax;
+    if (p.ret != null) el.ret.checked = p.ret;
+    st.hooks = p.hooks || null; st.force = p.force != null ? p.force : -1;
+    if (p.tab && rerun) st.tab = p.tab;
+    if (rerun) run();
+  }
+
+  // ------------------------------------------------------------ run
+  function readCfg() {
+    const num = (e, lo, hi, name) => {
+      const v = Number(e.value);
+      if (e.value === "" || !Number.isFinite(v)) throw new Error(`${name} needs a number.`);
+      if (v < lo || v > hi) throw new Error(`${name} must be between ${lo} and ${hi}.`);
+      return v;
+    };
+    const ncyl = Math.round(num(el.ncyl, 2, 100000, "Cylinders"));
+    const cfg = {
+      ncyl, head: Math.round(num(el.head, 0, ncyl - 1, "Head start")), dir: Number(el.dir.value),
+      settle: num(el.settle, 0, 100, "Settle time"), fullStroke: num(el.stroke, 0, 1000, "Full-stroke seek"),
+      rot: num(el.rot, 0, 1000, "Rotation time"), qBusy: num(el.qbusy, 1, 1000, "Busy threshold"),
+      ageFactor: num(el.age, 0.1, 100, "Rescue factor"), ageFloor: num(el.floor, 0, 100000, "Rescue minimum"),
+      countReturn: el.ret.checked,
+      cdir: el.cdir.value === "" ? null : Number(el.cdir.value),
+      queueCap: Math.round(num(el.cap, 0, 2000, "Queue cap")), overflow: el.ovf.value,
+      dlMaxInRow: Math.round(num(el.dlmax, 0, 999, "Deadline jumps in a row")), freezeRescue: el.freeze.checked,
+      forceRescue: st.force,
+      beforeDispatch: st.hooks && st.hooks.beforeDispatch, afterComplete: st.hooks && st.hooks.afterComplete,
+    };
+    let reqs;
+    if (el.wl.value === "custom") {
+      const p = E.parseCustom(el.queue.value, ncyl);
+      if (p.error) throw new Error(p.error);
+      reqs = p.reqs;
+    } else {
+      const n = Math.round(num(el.n, 1, 2000, "Requests"));
+      reqs = E.generate({ kind: el.wl.value, n, ncyl, rate: num(el.rate, 0, 2000, "Arrival rate"), seed: Math.round(Number(el.seed.value) || 1) });
+    }
+    st.injected.forEach((r, i) => { if (r.cyl <= ncyl - 1) reqs.push({ id: reqs.length, cyl: r.cyl, arr: r.arr, injected: true }); });
+    return { cfg, reqs };
+  }
+
+  function run(keepStep) {
+    stop();
+    try {
+      const { cfg, reqs } = readCfg();
+      st.cfg = cfg; st.reqs = reqs;
+      st.out = E.runAll(reqs, cfg);
+      $("#err").hidden = true;
+    } catch (e) {
+      $("#err").textContent = e.message;
+      $("#err").hidden = false;
+      st.out = null;
+    }
+    $("#note").textContent = el.wl.value === "custom" && EDGE[el.edge.value].note ? EDGE[el.edge.value].note : WL[el.wl.value].note;
+    if (!keepStep) st.k = 0;
+    if (typeof simReset === "function" && !keepStep) simReset();
+    render();
+  }
+
+  // ------------------------------------------------------------ charts
+  function ticks(max) {
+    const raw = max / 4, p = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= raw) || p * 10;
+    const t = [];
+    for (let v = 0; v <= max + 1e-9; v += step) t.push(Math.round(v * 100) / 100);
+    return t;
+  }
+
+  // Classic head-movement chart: cylinders across, requests served downward.
+  function headChart(res, opt) {
+    const W = opt.w || 320, H = opt.h || 300, L = 8, Rm = 12, T = 24, B = 8;
+    const nc = res.cfg.ncyl, S = res.steps.length, upto = opt.upto == null ? S : opt.upto;
+    const x = (c) => L + (nc > 1 ? c / (nc - 1) : 0.5) * (W - L - Rm);
+    const y = (k) => T + (S ? k / S : 0) * (H - T - B);
+    let done = "", rest = "", jumps = "", dots = "";
+    let px = x(res.cfg.head), py = y(0);
+    let cur = `M${px.toFixed(1)} ${py.toFixed(1)}`;
+    const ours = opt.ours ? " ours" : "";
+    res.steps.forEach((s, i) => {
+      const pts = [s.from].concat(s.path);
+      let dist = 0; const seg = [];
+      for (let j = 0; j + 1 < pts.length; j++) { const d = Math.abs(pts[j + 1] - pts[j]); seg.push(d); dist += d; }
+      let acc = 0;
+      for (let j = 0; j + 1 < pts.length; j++) {
+        acc += seg[j];
+        const nx = x(pts[j + 1]), ny = y(i) + (dist ? acc / dist : 1) * (y(i + 1) - y(i));
+        const isJump = s.jumpFrom != null && j === s.jumpFrom;
+        if (isJump) { jumps += `M${px.toFixed(1)} ${py.toFixed(1)}L${nx.toFixed(1)} ${ny.toFixed(1)}`; cur += `M${nx.toFixed(1)} ${ny.toFixed(1)}`; }
+        else cur += `L${nx.toFixed(1)} ${ny.toFixed(1)}`;
+        px = nx; py = ny;
+      }
+      if (i + 1 === upto) { done = cur; cur = `M${px.toFixed(1)} ${py.toFixed(1)}`; }
+      if (S <= 120) {
+        const r = res.reqs.find((q) => q.id === s.id);
+        dots += `<circle class="dot${i < upto ? ours : ""}" ${i >= upto ? 'style="stroke:var(--line)"' : ""} cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${S <= 40 ? 3 : 2.2}"><title>Step ${i + 1}: request #${s.id}, cylinder ${s.cyl}, waited ${f1(r.wait)} ms</title></circle>`;
+      }
+    });
+    if (S === 0) done = cur; else if (upto < S) rest = cur;
+    const tk = ticks(nc - 1).filter((v) => v <= nc - 1);
+    if (tk[tk.length - 1] !== nc - 1 && (nc - 1 - tk[tk.length - 1]) / (nc - 1) > 0.08) tk.push(nc - 1);
+    const grid = tk.map((v) => `<line class="gr" x1="${x(v)}" x2="${x(v)}" y1="${T}" y2="${H - B}"/><text class="t-mut" x="${x(v)}" y="${T - 9}" font-size="11" text-anchor="middle">${v}</text>`).join("");
+    const hx = x(res.cfg.head);
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opt.label || "Head movement")}">${grid}
+      <path class="trk faint" d="${rest}"/><path class="trk${ours}" d="${done}"/><path class="jump" d="${jumps}"/>${dots}
+      <path class="hd" d="M${hx - 5} ${T - 3}L${hx + 5} ${T - 3}L${hx} ${T + 5}Z"><title>Head starts at ${res.cfg.head}</title></path></svg>`;
+  }
+
+  function barChart(rows, unit, label) {
+    const W = 600, rh = 28, L = 78, H = rows.length * rh + 6, max = Math.max(...rows.map((r) => r.v), 1e-9);
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">` + rows.map((r, i) => {
+      const w = (r.v / max) * (W - L - 90), y = i * rh + 4;
+      return `<text class="t-ink" x="${L - 8}" y="${y + 14}" font-size="12" text-anchor="end" font-weight="${r.ours ? 600 : 400}">${r.name}</text>
+        <rect class="bar${r.ours ? " ours" : ""}" x="${L}" y="${y}" width="${Math.max(w, 1).toFixed(1)}" height="18" rx="3"><title>${r.name}: ${f1(r.v)} ${unit}</title></rect>
+        <text class="t-ink" x="${(L + w + 6).toFixed(1)}" y="${y + 14}" font-size="12">${f1(r.v)}</text>`;
+    }).join("") + "</svg>";
+  }
+
+  function scatter(res, victimId, ymax, tmax, label) {
+    const W = 600, H = 250, L = 46, Rm = 14, T = 12, B = 30;
+    const x = (t) => L + (tmax ? t / tmax : 0) * (W - L - Rm), y = (v) => H - B - (ymax ? v / ymax : 0) * (H - T - B);
+    const yt = ticks(ymax), xt = ticks(tmax);
+    while (yt[yt.length - 1] < ymax) yt.push(yt[yt.length - 1] + (yt[1] || 1));
+    ymax = yt[yt.length - 1];
+    let s = yt.map((v) => `<line class="gr" x1="${L}" x2="${W - Rm}" y1="${y(v)}" y2="${y(v)}"/><text class="t-mut" x="${L - 6}" y="${y(v) + 4}" font-size="11" text-anchor="end">${f0(v)}</text>`).join("");
+    s += xt.map((v) => `<text class="t-mut" x="${x(v)}" y="${H - B + 16}" font-size="11" text-anchor="middle">${f0(v)}</text>`).join("");
+    s += `<text class="t-mut" x="${W - Rm}" y="${H - 2}" font-size="11" text-anchor="end">arrival time (ms)</text>`;
+    let v = null;
+    for (const r of res.reqs) { if (r.id === victimId) { v = r; continue; } s += `<circle class="pt" cx="${x(r.arr).toFixed(1)}" cy="${y(r.wait).toFixed(1)}" r="2.4"><title>#${r.id} cyl ${r.cyl}: waited ${f1(r.wait)} ms</title></circle>`; }
+    if (v) {
+      const vx = x(v.arr), vy = y(v.wait), right = vx < W * 0.6;
+      s += `<circle class="crit" cx="${vx.toFixed(1)}" cy="${vy.toFixed(1)}" r="5.5"><title>#${v.id} cyl ${v.cyl}: waited ${f1(v.wait)} ms</title></circle>
+        <text class="t-ink" x="${(vx + (right ? 10 : -10)).toFixed(1)}" y="${(vy < T + 14 ? vy + 16 : vy - 8).toFixed(1)}" font-size="12" font-weight="600" text-anchor="${right ? "start" : "end"}">#${v.id} (cyl ${v.cyl}) waited ${f0(v.wait)} ms</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}"><line class="ax" x1="${L}" x2="${W - Rm}" y1="${H - B}" y2="${H - B}"/>${s}</svg>`;
+  }
+
+  // ------------------------------------------------------------ views
+  const ALLCOLS = [
+    ["Head movement (cyl)", (m) => m.move, f0, -1, true],
+    ["Avg seek (cyl)", (m) => m.avgSeek, f1, -1, false],
+    ["Avg wait (ms)", (m) => m.meanWait, f1, -1, true],
+    ["Worst wait (ms)", (m) => m.maxWait, f1, -1, true],
+    ["Most overtaken", (m) => m.maxOvertake, f0, -1, true],
+    ["Fairness (Jain)", (m) => m.jain, (v) => v.toFixed(2), +1, false],
+    ["Throughput (req/s)", (m) => m.thr, f1, +1, false],
+  ];
+  let COLS = ALLCOLS.filter((c) => c[4]);
+
+  function emptyState(where) {
+    $(where).innerHTML = `<div class="panel empty">${st.out ? "No requests to schedule. Type at least one cylinder in the queue box, or pick another preset." : "Fix the input above to see results."}</div>`;
+  }
+
+  function renderCompare() {
+    const o = st.out;
+    if (!o || !st.reqs.length) return emptyState("#v-compare");
+    const A = o.ADAPTIVE.m;
+    const bestOf = (f, sgn) => { let b = null; for (const a of ALGOS) { const v = f(o[a].m); if (b == null || v * sgn > b.v * sgn + 1e-9) b = { a, v }; } return b; };
+    const bw = bestOf((m) => m.meanWait, -1), bm = bestOf((m) => m.maxWait, -1), bh = bestOf((m) => m.move, -1);
+    const kpi = (val, txt) => `<div class="kpi"><b class="num">${val}</b><span>${txt}</span></div>`;
+    let h = `<div class="kpis">
+      ${kpi(f1(A.meanWait) + " ms", `our average wait (best other: ${NAME(bw.a)}, ${f1(bw.v)} ms)`)}
+      ${kpi(f1(A.maxWait) + " ms", `our worst wait (SSTF: ${f1(o.SSTF.m.maxWait)} ms)`)}
+      ${kpi(f0(A.move) + " cyl", `our head movement (FCFS: ${f0(o.FCFS.m.move)})`)}
+      ${kpi(st.reqs.length + " requests", `${o.ADAPTIVE.rescues} starvation rescue${o.ADAPTIVE.rescues === 1 ? "" : "s"} by our scheduler`)}
+    </div>`;
+    const best = COLS.map(([, f, , sgn]) => { let b = null; for (const a of ALGOS) { const v = f(o[a].m); if (b == null || v * sgn > b * sgn + 1e-9) b = v; } return b; });
+    h += `<div class="panel tw"><table><thead><tr><th>Algorithm</th>${COLS.map((c) => `<th>${c[0]}</th>`).join("")}</tr></thead><tbody>` +
+      ALGOS.map((a) => `<tr class="${a === "ADAPTIVE" ? "ours" : ""}"><td><b>${NAME(a)}</b></td>${COLS.map(([, f, fmt], i) => { const v = f(o[a].m); return `<td class="n${Math.abs(v - best[i]) < 1e-9 ? " best" : ""}">${fmt(v)}</td>`; }).join("")}</tr>`).join("") +
+      `</tbody></table><p class="note" style="margin-top:8px">Best value in each column is highlighted. Wait = time from arrival until the head starts moving to the request. "Most overtaken" = how many later requests were served first, the clearest sign of starvation. <label class="chk" style="display:inline-flex;margin-left:8px"><input type="checkbox" id="morecols"${st.moreCols ? " checked" : ""}> Show more columns</label></p></div>`;
+    if (st.reqs.length <= 40) {
+      const dirw = (d) => (d > 0 ? "up" : "down"), cd = st.cfg.cdir != null ? st.cfg.cdir : st.cfg.dir;
+      const ord = (res) => [`<b>${res.cfg.head}</b>`].concat(res.steps.map((x) => x.path.slice(0, -1).map((e) => `<span class="muted">(${e})</span>`).concat([String(x.cyl)]).join(" &#8594; "))).join(" &#8594; ");
+      h += `<div class="panel tw"><h3>Service order</h3><table class="qt"><thead><tr><th>Algorithm</th><th>Head movement (cyl)</th><th style="text-align:left">Head path, start in bold, edge visits in brackets</th></tr></thead><tbody>` +
+        ALGOS.map((a) => `<tr class="${a === "ADAPTIVE" ? "ours" : ""}"><td><b>${NAME(a)}</b></td><td class="n">${f0(o[a].m.move)}</td><td class="cellwrap mono">${ord(o[a])}</td></tr>`).join("") +
+        `</tbody></table><p class="note" style="margin-top:8px">SCAN and LOOK start moving ${dirw(st.cfg.dir)}; C-SCAN and C-LOOK sweep ${dirw(cd)}; the C-SCAN / C-LOOK return jump is ${st.cfg.countReturn ? "counted" : "not counted"}.</p></div>`;
+    }
+    h += `<h2>Head movement</h2><p class="note">Cylinders run left to right; each line follows the head from its start (amber marker) down through every request it serves. Dashed lines are C-SCAN and C-LOOK return jumps${st.cfg.countReturn ? ", counted in head movement" : ", not counted in head movement"}.</p><div class="grid">` +
+      ALGOS.map((a) => `<figure class="chart${a === "ADAPTIVE" ? " ours" : ""}" style="margin:0"><header><b>${NAME(a)}</b><span class="num">${f0(o[a].m.move)} cyl</span></header>${headChart(o[a], { ours: a === "ADAPTIVE", w: 320, h: Math.min(260, 110 + o[a].steps.length * 2), label: NAME(a) + " head movement" })}</figure>`).join("") + "</div>";
+    h += `<h2>Waiting time</h2><div class="two">
+      <figure class="chart" style="margin:0"><header><b>Average wait (ms)</b></header>${barChart(ALGOS.map((a) => ({ name: NAME(a), v: o[a].m.meanWait, ours: a === "ADAPTIVE" })), "ms", "Average wait")}</figure>
+      <figure class="chart" style="margin:0"><header><b>Worst wait (ms)</b></header>${barChart(ALGOS.map((a) => ({ name: NAME(a), v: o[a].m.maxWait, ours: a === "ADAPTIVE" })), "ms", "Worst wait")}</figure></div>`;
+    $("#v-compare").innerHTML = `<div style="display:grid;gap:14px">${h}</div>`;
+    $("#morecols").addEventListener("change", (e) => { st.moreCols = e.target.checked; COLS = ALLCOLS.filter((c) => c[4] || st.moreCols); renderCompare(); });
+  }
+
+  function renderStarve() {
+    const o = st.out;
+    if (!o || !st.reqs.length) return emptyState("#v-starve");
+    const S = o.SSTF, A = o.ADAPTIVE;
+    const v = S.reqs.reduce((b, r) => (r.wait > b.wait ? r : b));
+    const va = A.reqs.find((r) => r.id === v.id);
+    const rescue = A.steps.find((s) => s.mode === 3 && s.target === v.id);
+    const ymax = Math.max(S.m.maxWait, A.m.maxWait, 1), tmax = Math.max(...st.reqs.map((r) => r.arr), 1);
+    const isBatch = st.reqs.every((r) => r.arr === 0);
+    let h = `<div class="panel story">
+      <h2>Request #${v.id} at cylinder ${v.cyl} is the one SSTF neglects most</h2>
+      <p>It arrived at ${f1(v.arr)} ms. SSTF kept choosing closer requests, so it waited <b class="num">${f1(v.wait)} ms</b>${v.overtaken ? ` while <b class="num">${v.overtaken}</b> requests that arrived after it were served first` : ""}.</p>
+      <p>Under Adaptive it waited <b class="num">${f1(va.wait)} ms</b>. ${rescue ? `The starvation guard fired at ${f1(rescue.t)} ms: <i>${esc(rescue.why)}</i>.` : va.wait < v.wait ? "A sweep reached it before the starvation guard needed to step in." : "Here Adaptive behaves like SSTF for this request."}</p>
+      ${isBatch ? `<p class="muted">All requests in this queue arrive at once, so no request can be overtaken. Pick the Starvation scenario to see SSTF starve a request while new ones keep arriving.</p>` : ""}
+      ${el.wl.value !== "starvation" ? `<p><button type="button" class="btn ghost" id="goStarve">Load the starvation scenario</button></p>` : ""}
+    </div>
+    <div class="two">
+      <figure class="chart" style="margin:0"><header><b>SSTF: wait of every request</b><span class="num">worst ${f0(S.m.maxWait)} ms</span></header>${scatter(S, v.id, ymax, tmax, "SSTF waiting times")}</figure>
+      <figure class="chart ours" style="margin:0"><header><b>Adaptive: wait of every request</b><span class="num">worst ${f0(A.m.maxWait)} ms</span></header>${scatter(A, v.id, ymax, tmax, "Adaptive waiting times")}</figure>
+    </div>
+    <div class="panel tw"><table><thead><tr><th>Algorithm</th><th>Wait of #${v.id} (ms)</th><th>Worst wait (ms)</th><th>Avg wait (ms)</th><th>Most overtaken</th></tr></thead><tbody>` +
+      ALGOS.map((a) => { const r = o[a].reqs.find((q) => q.id === v.id); return `<tr class="${a === "ADAPTIVE" ? "ours" : ""}"><td><b>${NAME(a)}</b></td><td class="n">${f1(r.wait)}</td><td class="n">${f1(o[a].m.maxWait)}</td><td class="n">${f1(o[a].m.meanWait)}</td><td class="n">${o[a].m.maxOvertake}</td></tr>`; }).join("") +
+      `</tbody></table><p class="note" style="margin-top:8px">The trade-off: SSTF has the lowest average wait because it never travels far, and that is exactly why the far request starves. The "Rescue after" setting (Settings, then Disk timing and scheduler tuning) moves Adaptive between the two.</p></div>`;
+    $("#v-starve").innerHTML = `<div style="display:grid;gap:14px">${h}</div>`;
+    const g = $("#goStarve");
+    if (g) g.addEventListener("click", () => { $("#scenario").value = "w:starvation"; el.wl.value = "starvation"; st.injected = []; applyWorkload("starvation"); run(); });
+  }
+
+  function track(res, k) {
+    const W = 760, H = 130, L = 14, Rm = 14, nc = res.cfg.ncyl;
+    const x = (c) => L + (nc > 1 ? c / (nc - 1) : 0.5) * (W - L - Rm);
+    const s = res.steps[k], t = s.t;
+    const lim = s.limit || st.out.starveMs;
+    const pend = res.reqs.filter((r) => (r.admitted != null ? r.admitted : r.arr) <= t && r.step >= k);
+    const stack = {};
+    let dots = "";
+    for (const r of pend.sort((a, b) => a.arr - b.arr)) {
+      const n = (stack[r.cyl] = (stack[r.cyl] || 0) + 1);
+      const age = t - r.arr, cls = r.id === s.id ? "hd" : age > lim ? "crit" : "pt";
+      dots += `<circle class="${cls}" cx="${x(r.cyl).toFixed(1)}" cy="${78 - n * 9}" r="${r.id === s.id ? 5 : 3.6}"${cls === "pt" ? ' style="fill-opacity:0.9"' : ""}><title>#${r.id} cyl ${r.cyl}, waiting ${f1(age)} ms</title></circle>`;
+    }
+    const pts = [s.from].concat(s.path);
+    let d = `M${x(pts[0])} 96`;
+    for (let j = 1; j < pts.length; j++) d += (s.jumpFrom === j - 1 ? "M" : "L") + `${x(pts[j])} 96`;
+    const tk = ticks(nc - 1).filter((v) => v <= nc - 1);
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Disk track at step ${k + 1}">
+      <line class="ax" x1="${L}" x2="${W - Rm}" y1="84" y2="84" style="stroke-width:2"/>
+      ${tk.map((v) => `<line class="ax" x1="${x(v)}" x2="${x(v)}" y1="80" y2="88"/><text class="t-mut" x="${x(v)}" y="124" font-size="14" text-anchor="middle">${v}</text>`).join("")}
+      ${dots}
+      <path d="${d}" fill="none" style="stroke:var(--head);stroke-width:2.4" marker-end="url(#ah)"/>
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="hd"/></marker></defs>
+      <path class="hd" d="M${x(s.from) - 6} 106L${x(s.from) + 6} 106L${x(s.from)} 97Z"><title>Head at ${s.from}</title></path>
+    </svg>`;
+  }
+
+  function renderStep() {
+    const o = st.out;
+    const body = $("#stepbody");
+    if (!o || !st.reqs.length) { body.innerHTML = `<div class="panel empty" style="margin-top:12px">${o ? "No requests to step through." : "Fix the input above first."}</div>`; return; }
+    const res = o[st.salgo], S = res.steps.length;
+    st.k = Math.max(0, Math.min(st.k, S - 1));
+    const s = res.steps[st.k];
+    $("#sk").max = String(S - 1); $("#sk").value = String(st.k);
+    el.injc.max = String(st.cfg.ncyl - 1);
+    const pend = res.reqs.filter((r) => (r.admitted != null ? r.admitted : r.arr) <= s.t && r.step >= st.k).sort((a, b) => (s.t - b.arr) - (s.t - a.arr));
+    const oldest = pend.length ? s.t - pend[0].arr : 0;
+    const adaptive = st.salgo === "ADAPTIVE";
+    let sig = "";
+    if (adaptive) {
+      const lim = s.limit, frac = Math.min(1, oldest / lim);
+      sig = `<div class="sig"><span>Average queue length</span><b class="num">${s.qe.toFixed(2)}</b>
+        <span>Load level</span><b>${s.level ? "busy" : "light"}</b>
+        <span>Oldest request has waited</span><b class="num">${f1(oldest)} ms</b>
+        <span>Rescue limit</span><b class="num">${f1(lim)} ms</b></div>
+        <div class="meter${oldest > lim ? " over" : ""}" aria-hidden="true"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>`;
+    }
+    const modeChip = adaptive ? `<span class="chip"><span class="sw" style="background:var(--m${s.mode})"></span>${MODE[s.mode]}</span>` : `<span class="chip">${NAME(st.salgo)}</span>`;
+    const rows = pend.slice(0, 10).map((r) => `<tr class="${r.id === s.id ? "pick" : ""}"><td>#${r.id}${r.injected ? " (added)" : ""}</td><td class="n">${r.cyl}</td><td class="n">${f1(s.t - r.arr)}</td><td class="n">${Math.abs(r.cyl - s.from)}</td></tr>`).join("");
+    body.innerHTML = `<div style="display:grid;gap:12px;margin-top:12px">
+      <div class="cols">
+        <div class="panel decide">
+          <div class="muted num" style="font-size:0.82rem">Step ${st.k + 1} of ${S} &#183; t = ${f1(s.t)} ms &#183; ${s.qlen} waiting</div>
+          <h2 class="num">Head ${s.from} &#8594; ${s.cyl} <span class="muted" style="font-size:0.9rem">(${s.counted} cyl)</span></h2>
+          <div>${modeChip}</div>
+          <p class="why" style="margin:0">${esc(s.why)}.</p>
+          ${sig}
+        </div>
+        <div class="panel"><h3>Disk right now</h3>${track(res, st.k)}
+          <div class="legendrow"><span><span class="sw" style="background:var(--head)"></span>head and chosen request</span><span><span class="sw" style="background:var(--muted)"></span>waiting</span><span><span class="sw" style="background:var(--crit)"></span>waiting past the rescue limit</span></div></div>
+      </div>
+      <div class="two">
+        <div class="panel tw"><h3>Queue at this step, longest wait first</h3><table class="qt"><thead><tr><th>Request</th><th>Cylinder</th><th>Waiting (ms)</th><th>Distance</th></tr></thead><tbody>${rows}</tbody></table>${pend.length > 10 ? `<p class="note">and ${pend.length - 10} more</p>` : ""}</div>
+        <figure class="chart${adaptive ? " ours" : ""}" style="margin:0"><header><b>${NAME(st.salgo)} so far</b><span class="num">${f0(res.steps.slice(0, st.k + 1).reduce((a, b) => a + b.counted, 0))} of ${f0(res.m.move)} cyl</span></header>${headChart(res, { ours: adaptive, upto: st.k + 1, w: 420, h: Math.min(320, 130 + S * 2.5), label: "Head movement so far" })}</figure>
+      </div></div>`;
+    $("#play").textContent = st.timer ? "Pause" : "Play";
+  }
+
+  function renderTrace() {
+    const o = st.out;
+    if (!o || !st.reqs.length) { $("#tracebody").innerHTML = `<div class="panel empty">${o ? "No requests, so nothing to trace." : "Fix the input above first."}</div>`; return; }
+    const a = $("#talgo").value, R = o[a], f = $("#tfilter").value;
+    const rescues = (res) => res.events.filter((e) => e.type === "RESCUE END").map((e) => +((/after (\d+) dispatch/.exec(e.info) || [0, 0])[1]));
+    const cap = st.cfg.queueCap > 0, dl = o.ADAPTIVE.acct.dlTotal > 0;
+    let h = `<div class="panel tw"><h3>Accounting</h3><table><thead><tr><th>Algorithm</th><th>Submitted</th><th>Served</th>${cap ? "<th>Rejected</th><th>Deferred</th><th>Longest wait outside (ms)</th>" : ""}${dl ? "<th>Deadlines met</th><th>Worst lateness (ms)</th>" : ""}<th>Worst wait (ms)</th><th>Rescues</th><th>Longest rescue (dispatches)</th></tr></thead><tbody>` +
+      ALGOS.map((x) => { const c = o[x].acct, rs = rescues(o[x]); return `<tr class="${x === "ADAPTIVE" ? "ours" : ""}"><td><b>${NAME(x)}</b></td><td class="n">${c.submitted}</td><td class="n">${c.served}</td>${cap ? `<td class="n">${c.rejected}</td><td class="n">${c.deferred}</td><td class="n">${f1(c.maxOutside)}</td>` : ""}${dl ? `<td class="n">${c.dlMet} of ${c.dlTotal}</td><td class="n">${f1(c.maxLate)}</td>` : ""}<td class="n">${f1(o[x].m.maxWait)}</td><td class="n">${x === "ADAPTIVE" ? rs.length : "&#8212;"}</td><td class="n">${x === "ADAPTIVE" && rs.length ? Math.max(...rs) : "&#8212;"}</td></tr>`; }).join("") +
+      `</tbody></table><p class="note" style="margin-top:8px">Submitted = served + rejected for every algorithm. Waiting time counts from the original arrival, including any time spent waiting outside a full queue.</p></div>`;
+    const keep = (e) => f === "all" ? true : f === "disp" ? e.type === "DISPATCH" || e.type === "COMPLETE" : e.type !== "ARRIVE" && (e.type !== "DISPATCH" || /^(RESCUE|DEADLINE)/.test(e.info)) && (e.type !== "COMPLETE" || /deadline/.test(e.info));
+    const rows = R.events.filter(keep), shown = rows.slice(0, 800);
+    const cls = (e) => e.type === "REJECT" || /MISSED/.test(e.info) ? "ev-miss" : /RESCUE/.test(e.type) || /^RESCUE/.test(e.info) ? "ev-RESCUE" : e.type === "DEFER" || e.type === "ADMIT" ? "ev-DEFER" : "";
+    h += `<div class="panel tw"><h3>${NAME(a)} event trace <span class="muted" style="font-weight:400">(${rows.length} events${rows.length > shown.length ? ", first 800 shown" : ""})</span></h3><table class="qt"><thead><tr><th>Time (ms)</th><th>Event</th><th>Request</th><th>Cylinder</th><th style="text-align:left">Details</th></tr></thead><tbody>` +
+      shown.map((e) => `<tr><td class="n">${f1(e.t)}</td><td class="${cls(e)}" style="text-align:left">${e.type}</td><td>${e.id >= 0 ? "#" + e.id : ""}</td><td class="n">${e.cyl >= 0 ? e.cyl : ""}</td><td class="cellwrap">${esc(e.info)}</td></tr>`).join("") + `</tbody></table></div>`;
+    $("#tracebody").innerHTML = h;
+  }
+  $("#talgo").addEventListener("change", renderTrace);
+  $("#tfilter").addEventListener("change", renderTrace);
+  $("#tcopy").addEventListener("click", () => {
+    if (!st.out) return;
+    const R = st.out[$("#talgo").value];
+    const txt = ["time_ms\tevent\trequest\tcylinder\tdetails"].concat(R.events.map((e) => `${e.t.toFixed(3)}\t${e.type}\t${e.id >= 0 ? "#" + e.id : ""}\t${e.cyl >= 0 ? e.cyl : ""}\t${e.info}`)).join("\n");
+    const done = (m) => { $("#tcopied").textContent = m; };
+    try {
+      navigator.clipboard.writeText(txt).then(() => done(`Copied ${R.events.length} events`), () => fallback());
+    } catch (e) { fallback(); }
+    function fallback() {
+      const ta = document.createElement("textarea"); ta.value = txt; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      done(ok ? `Copied ${R.events.length} events` : "Copy is blocked here; select the table and copy it instead");
+    }
+  });
+
+  function renderAbout() {
+    const c = E.makeCfg(st.cfg || {});
+    $("#v-about").innerHTML = `<div class="panel about">
+      <h2>How the adaptive scheduler decides</h2>
+      <p>Before every dispatch it checks four things in order. The first match wins.</p>
+      <ol>
+        <li><b>Starving?</b> If the oldest request has waited longer than max(${f0(c.ageFloor)} ms, ${c.ageFactor} &#215; the typical wait), sweep toward it and serve every request on the way.</li>
+        <li><b>Queue light?</b> If the average queue length is below ${c.qBusy} (it must pass ${c.qBusy * (1 + c.hyst)} to count as busy and fall under ${c.qBusy * (1 - c.hyst)} to count as light again), serve the nearest request (SSTF).</li>
+        <li><b>Clustered?</b> If at least 70% of the queue sits within 5% of the disk around the median cylinder, stay in that hot zone (cluster-SSTF).</li>
+        <li><b>Otherwise</b> sweep like an elevator and reverse at the last request (LOOK).</li>
+      </ol>
+      <h3>Live challenge features</h3>
+      <ol>
+        <li><b>Separate sweep directions.</b> SCAN/LOOK and C-SCAN/C-LOOK can start in different directions, and the return jump can be counted or not.</li>
+        <li><b>Short-queue starvation.</b> The starvation guard runs before the load check, so it still fires when the average queue is tiny.</li>
+        <li><b>Queue cap with backpressure.</b> A full queue either defers new requests (they wait outside, in arrival order) or rejects them. Submitted always equals served plus rejected.</li>
+        <li><b>Frozen rescue batch.</b> When a rescue starts, only the requests already on its path may be served before the target, so new arrivals cannot stretch the rescue. This is the F-SCAN idea.</li>
+        <li><b>Deadline override.</b> A request with a deadline jumps the queue only when serving even one other request first would make it late; the earliest deadline wins, ties go to the earlier arrival, then the lower id. While another request is starving, at most ${c.dlMaxInRow} jumps happen in a row before the rescue gets a turn. A request whose deadline has already passed loses its priority but stays protected by the starvation guard.</li>
+      </ol>
+      <h3>Timing model</h3>
+      <p>Seek time = ${c.settle} ms + ${c.perCyl.toFixed(4)} ms per cylinder (full stroke ${c.fullStroke} ms over ${c.ncyl} cylinders). Every request adds ${c.rot} ms of rotation and transfer. Wait is measured from arrival until the head starts moving to the request.</p>
+      <h3>Same engine as the C++ simulator</h3>
+      <p>This page runs the same decision logic as <code>adaptive_disk_sched.cpp</code>. Both were run on 600 random test cases, 4,200 schedules in all, and produced identical service orders, head movement and timings (with the live challenge features switched off, since they exist only here).</p>
+<pre>g++ -O2 -std=c++17 adaptive_disk_sched.cpp -o disksim
+./disksim                                   # full benchmark, writes CSV files
+./disksim --queue "98,183,37,122,14,124,65,67" --head 53 --cyl 200</pre>
+    </div>`;
+  }
+
+  const TITLES = { sim: "Watch the disks race", compare: "Results", starve: "Starvation", step: "Step by step", trace: "Event log", about: "How it works", challenges: "" };
+  function render() {
+    for (const t of ["sim", "compare", "starve", "step", "trace", "about"]) {
+      $("#v-" + t).hidden = st.tab !== t;
+      $("#tab-" + t).setAttribute("aria-selected", String(st.tab === t));
+    }
+    const home = st.tab === "home", welcome = st.tab === "welcome", data = ["sim", "compare", "starve", "step", "trace"].includes(st.tab);
+    $("#v-welcome").hidden = !welcome;
+    $("#v-home").hidden = !home;
+    $("#v-challenges").hidden = st.tab !== "challenges";
+    $("#appbar").hidden = home || welcome;
+    $("#picker").hidden = !data;
+    $("#pagehead").hidden = !TITLES[st.tab];
+    $("#pagetitle").textContent = TITLES[st.tab] || "";
+    if (home || welcome || st.tab === "challenges") { simStop(); return; }
+    if (st.tab !== "sim") simStop();
+    if (st.tab === "sim") drawSim();
+    else if (st.tab === "compare") renderCompare();
+    else if (st.tab === "starve") renderStarve();
+    else if (st.tab === "step") renderStep();
+    else if (st.tab === "trace") renderTrace();
+    else renderAbout();
+  }
+
+  // ------------------------------------------------------------ disk simulation
+  // Top view of a hard disk: the platter spins, the actuator arm swings to the cylinder of each
+  // request in the order the chosen algorithm serves them, timed by the same seek model.
+  const SIM = { t: 0, playing: false, raf: 0, last: 0 };
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  $("#simA").innerHTML = ALGOS.map((a) => `<option value="${a}"${a === "FCFS" ? " selected" : ""}>${NAME(a)}</option>`).join("");
+  $("#simB").innerHTML = ALGOS.map((a) => `<option value="${a}"${a === "ADAPTIVE" ? " selected" : ""}>${NAME(a)}</option>`).join("");
+
+  // drive geometry in units of 1/100 of the canvas width
+  const G = { cx: 40, cy: 40, R: 36, rIn: 11, rOut: 34, px: 86, py: 14, L: 49 };
+  const OMEGA = 0.04; // platter turn per simulated ms (slowed down so the eye can follow it)
+  const radU = (c, nc) => G.rOut - (nc > 1 ? c / (nc - 1) : 0) * (G.rOut - G.rIn);
+  function armHead(r) {
+    const dx = G.cx - G.px, dy = G.cy - G.py, d = Math.hypot(dx, dy), a1 = (G.L * G.L - r * r + d * d) / (2 * d), hh = Math.sqrt(Math.max(0, G.L * G.L - a1 * a1));
+    const bx = G.px + (a1 * dx) / d, by = G.py + (a1 * dy) / d;
+    const p1 = { x: bx - (hh * dy) / d, y: by + (hh * dx) / d }, p2 = { x: bx + (hh * dy) / d, y: by - (hh * dx) / d };
+    return p2.y > p1.y ? p2 : p1;
+  }
+  function prep(res) {
+    if (res._prep) return res._prep;
+    const byId = new Map(res.reqs.map((r) => [r.id, r]));
+    const n = res.steps.length, start = new Float64Array(n), fin = new Float64Array(n), mv = new Float64Array(n + 1), wt = new Float64Array(n + 1);
+    res.steps.forEach((s, i) => { start[i] = s.t; fin[i] = s.fin; mv[i + 1] = mv[i] + s.counted; wt[i + 1] = wt[i] + (s.t - byId.get(s.id).arr); });
+    // place each request's sector so that it rotates under the head exactly when the head arrives on its cylinder
+    const ang = new Map();
+    res.steps.forEach((s) => {
+      const h = armHead(radU(s.cyl, res.cfg.ncyl));
+      ang.set(s.id, Math.atan2(h.y - G.cy, h.x - G.cx) - OMEGA * (s.t + res.cfg.perCyl * s.travel));
+    });
+    return (res._prep = { byId, start, fin, mv, wt, ang });
+  }
+  function lastLE(a, t) { let lo = 0, hi = a.length - 1, k = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m] <= t) { k = m; lo = m + 1; } else hi = m - 1; } return k; }
+  function headAt(res, t) {
+    const P = prep(res), k = lastLE(P.start, t), c = res.cfg;
+    if (k < 0) return { cyl: c.head, k };
+    const s = res.steps[k], move = c.perCyl * s.travel;
+    if (s.travel === 0 || move <= 0 || t >= s.t + move) return { cyl: s.cyl, k };
+    let d = ((t - s.t) / move) * s.travel;
+    const pts = [s.from].concat(s.path);
+    for (let j = 0; j + 1 < pts.length; j++) {
+      const seg = Math.abs(pts[j + 1] - pts[j]);
+      if (d <= seg) return { cyl: pts[j] + Math.sign(pts[j + 1] - pts[j]) * d, k, seeking: true };
+      d -= seg;
+    }
+    return { cyl: s.cyl, k };
+  }
+  function colors() {
+    const cs = getComputedStyle(document.documentElement), g = (n) => cs.getPropertyValue(n).trim();
+    return { ink: g("--ink"), muted: g("--muted"), line: g("--line"), crit: g("--crit"), head: g("--head"), accent: g("--accent"),
+      chassis: g("--chassis"), edge: g("--chassis-edge"), pHi: g("--platter-hi"), pLo: g("--platter-lo"), arm: g("--arm"), copper: g("--copper"), surface: g("--surface") };
+  }
+  function fit(cv, ratio) {
+    const w = Math.max(200, cv.clientWidth), h = Math.round(w * ratio), dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    cv.style.height = h + "px";
+    const ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w, h };
+  }
+  function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+
+  function drawDisk(cv, res, t, col) {
+    const { ctx, w: S, h: H } = fit(cv, 0.8);
+    const u = S / 100, nc = res.cfg.ncyl, P = prep(res);
+    ctx.clearRect(0, 0, S, H);
+    // casing
+    rrect(ctx, 1, 1, S - 2, H - 2, 3 * u);
+    ctx.fillStyle = col.chassis; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = col.edge; ctx.stroke();
+    for (const [sx, sy] of [[4, 4], [96, 4], [4, 76], [96, 76]]) {
+      ctx.beginPath(); ctx.arc(sx * u, sy * u, 1.3 * u, 0, 7); ctx.fillStyle = col.edge; ctx.fill();
+      ctx.beginPath(); ctx.moveTo((sx - 0.8) * u, sy * u); ctx.lineTo((sx + 0.8) * u, sy * u); ctx.strokeStyle = col.chassis; ctx.lineWidth = 0.4 * u; ctx.stroke();
+    }
+    const cx = G.cx * u, cy = G.cy * u, R = G.R * u, rIn = G.rIn * u, rOut = G.rOut * u, spin = OMEGA * t;
+    const rad = (c) => radU(c, nc) * u;
+    // platter: polished metal with a CD-like rainbow sheen
+    const g = ctx.createRadialGradient(cx - R * 0.35, cy - R * 0.4, R * 0.05, cx, cy, R);
+    g.addColorStop(0, col.pHi); g.addColorStop(1, col.pLo);
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.fillStyle = g; ctx.fill();
+    if (ctx.createConicGradient) {
+      const cg = ctx.createConicGradient(-0.9, cx, cy), lobe = ["rgba(255,90,90,0)", "rgba(255,170,70,.30)", "rgba(250,240,90,.26)", "rgba(90,225,150,.26)", "rgba(80,170,255,.32)", "rgba(175,100,255,.30)", "rgba(255,90,200,0)"];
+      lobe.forEach((c, i) => cg.addColorStop((i / (lobe.length - 1)) * 0.28, c));
+      cg.addColorStop(0.5, "rgba(255,90,90,0)");
+      lobe.forEach((c, i) => cg.addColorStop(0.5 + (i / (lobe.length - 1)) * 0.28, c));
+      cg.addColorStop(1, "rgba(255,90,200,0)");
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.arc(cx, cy, rIn * 0.9, 0, 7, true); ctx.fillStyle = cg; ctx.fill("evenodd");
+    }
+    // tracks and spinning servo wedges
+    ctx.lineWidth = 0.6;
+    for (let i = 0; i <= 6; i++) { ctx.beginPath(); ctx.arc(cx, cy, rIn + (i / 6) * (rOut - rIn), 0, 7); ctx.strokeStyle = "rgba(40,48,56,0.16)"; ctx.stroke(); }
+    for (let i = 0; i < 8; i++) {
+      const a = spin + (i * Math.PI) / 4;
+      ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * rIn, cy + Math.sin(a) * rIn); ctx.lineTo(cx + Math.cos(a) * rOut, cy + Math.sin(a) * rOut);
+      ctx.strokeStyle = i === 0 ? "rgba(30,36,42,0.45)" : "rgba(30,36,42,0.12)"; ctx.lineWidth = i === 0 ? 1.4 : 0.8; ctx.stroke();
+    }
+    // requests waiting on the platter
+    const hd = headAt(res, t), cur = hd.k >= 0 ? res.steps[hd.k] : null, lim = (cur && cur.limit) || st.out.starveMs;
+    for (const r of res.reqs) {
+      if ((r.admitted != null ? r.admitted : r.arr) > t || r.fin <= t) continue;
+      const a = P.ang.get(r.id) + spin, rr = rad(r.cyl), x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      const serving = r.start <= t;
+      ctx.beginPath(); ctx.arc(x, y, (serving ? 1.5 : 1.05) * u, 0, 7);
+      ctx.fillStyle = serving ? col.head : t - r.arr > lim ? col.crit : col.arm; ctx.fill();
+      if (serving) { ctx.lineWidth = 1.5; ctx.strokeStyle = col.surface; ctx.stroke(); }
+    }
+    // just-finished requests flash
+    const k0 = lastLE(P.fin, t);
+    for (let i = k0; i >= 0 && t - P.fin[i] < 25; i--) {
+      const s = res.steps[i], a = P.ang.get(s.id) + spin, rr = rad(s.cyl), f = (t - P.fin[i]) / 25;
+      ctx.beginPath(); ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, (1.2 + f * 3) * u, 0, 7);
+      ctx.strokeStyle = col.accent; ctx.globalAlpha = 1 - f; ctx.lineWidth = 2; ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    // spindle hub
+    const hub = ctx.createRadialGradient(cx - 2 * u, cy - 2 * u, u, cx, cy, rIn * 0.85);
+    hub.addColorStop(0, col.pHi); hub.addColorStop(1, col.edge);
+    ctx.beginPath(); ctx.arc(cx, cy, rIn * 0.85, 0, 7); ctx.fillStyle = hub; ctx.fill();
+    for (let i = 0; i < 6; i++) { const a = spin + (i * Math.PI) / 3; ctx.beginPath(); ctx.arc(cx + Math.cos(a) * rIn * 0.55, cy + Math.sin(a) * rIn * 0.55, 0.7 * u, 0, 7); ctx.fillStyle = col.arm; ctx.fill(); }
+    // actuator arm: pivot top right, head lands on the current cylinder
+    const px = G.px * u, py = G.py * u, L = G.L * u, hp = armHead(radU(hd.cyl, nc)), hx = hp.x * u, hy = hp.y * u;
+    const ax = (hx - px) / L, ay = (hy - py) / L, nx = -ay, ny = ax;
+    // voice coil behind the pivot
+    ctx.save(); ctx.translate(px, py); ctx.rotate(Math.atan2(ay, ax) + Math.PI);
+    rrect(ctx, 0, -5 * u, 12 * u, 10 * u, 2 * u); ctx.fillStyle = col.copper; ctx.fill();
+    rrect(ctx, 2 * u, -3 * u, 8 * u, 6 * u, 1.2 * u); ctx.fillStyle = col.arm; ctx.fill();
+    ctx.restore();
+    // arm body, tapering to the head
+    ctx.beginPath();
+    ctx.moveTo(px + nx * 3.2 * u, py + ny * 3.2 * u); ctx.lineTo(hx + nx * 0.8 * u - ax * 2 * u, hy + ny * 0.8 * u - ay * 2 * u);
+    ctx.lineTo(hx - nx * 0.8 * u - ax * 2 * u, hy - ny * 0.8 * u - ay * 2 * u); ctx.lineTo(px - nx * 3.2 * u, py - ny * 3.2 * u); ctx.closePath();
+    ctx.fillStyle = col.arm; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(px + ax * 8 * u, py + ay * 8 * u); ctx.lineTo(hx - ax * 4 * u, hy - ay * 4 * u); ctx.strokeStyle = col.edge; ctx.lineWidth = 0.35 * u; ctx.stroke();
+    // read/write head slider
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(Math.atan2(ay, ax));
+    rrect(ctx, -1.8 * u, -1.3 * u, 3.6 * u, 2.6 * u, 0.6 * u); ctx.fillStyle = col.head; ctx.fill();
+    ctx.restore();
+    // pivot bearing
+    const pg = ctx.createRadialGradient(px - u, py - u, 0.5 * u, px, py, 4.5 * u);
+    pg.addColorStop(0, col.pHi); pg.addColorStop(1, col.edge);
+    ctx.beginPath(); ctx.arc(px, py, 4.5 * u, 0, 7); ctx.fillStyle = pg; ctx.fill();
+    ctx.beginPath(); ctx.arc(px, py, 1.4 * u, 0, 7); ctx.fillStyle = col.arm; ctx.fill();
+    // labels
+    ctx.fillStyle = col.muted; ctx.font = `${Math.max(10, 2.6 * u)}px ${getComputedStyle(document.body).getPropertyValue("--f-mono") || "monospace"}`;
+    ctx.textAlign = "left";
+    ctx.fillText(`cyl ${Math.round(hd.cyl)}`, 80 * u, 74 * u);
+  }
+
+  function drawTrace(cv, res, t, tmax, col) {
+    const { ctx, w, h } = fit(cv, 0.2);
+    const L = 4, Rm = 4, T = 4, B = 4, nc = res.cfg.ncyl, c = res.cfg;
+    const x = (v) => L + (tmax ? v / tmax : 0) * (w - L - Rm), y = (cyl) => T + (nc > 1 ? cyl / (nc - 1) : 0.5) * (h - T - B);
+    ctx.clearRect(0, 0, w, h);
+    rrect(ctx, 0.5, 0.5, w - 1, h - 1, 6); ctx.strokeStyle = col.line; ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x(0), y(c.head));
+    let lastCyl = c.head;
+    for (const s of res.steps) {
+      if (s.t > t) break;
+      ctx.lineTo(x(s.t), y(lastCyl));
+      const pts = [s.from].concat(s.path), move = c.perCyl * s.travel;
+      let acc = 0;
+      for (let j = 0; j + 1 < pts.length; j++) {
+        acc += Math.abs(pts[j + 1] - pts[j]);
+        const tt = s.t + (s.travel ? (acc / s.travel) * move : 0);
+        if (tt > t) { const hd = headAt(res, t); ctx.lineTo(x(t), y(hd.cyl)); lastCyl = hd.cyl; break; }
+        if (s.jumpFrom === j) ctx.moveTo(x(tt), y(pts[j + 1])); else ctx.lineTo(x(tt), y(pts[j + 1]));
+        lastCyl = pts[j + 1];
+      }
+    }
+    ctx.lineTo(x(t), y(lastCyl));
+    ctx.strokeStyle = col.ink; ctx.lineWidth = 1.2; ctx.lineJoin = "round"; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x(t), T); ctx.lineTo(x(t), h - B); ctx.strokeStyle = col.head; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+
+  function simEnd() { const e = (a) => { const s = st.out[a].steps; return s.length ? s[s.length - 1].fin : 0; }; return Math.max(e($("#simA").value), e($("#simB").value)); }
+  function simStats(side, res, t) {
+    const P = prep(res), n = res.steps.length, k = lastLE(P.fin, t), served = k + 1;
+    const hd = headAt(res, t), cur = hd.k >= 0 ? res.steps[hd.k] : null;
+    let move = P.mv[served];
+    if (cur && cur.fin > t) move += Math.min(cur.counted, Math.abs(hd.cyl - cur.from));
+    const avg = served ? P.wt[served] / served : 0;
+    const waiting = res.reqs.filter((r) => (r.admitted != null ? r.admitted : r.arr) <= t && r.start > t).length;
+    $(`#sim${side}Stat`).innerHTML = `<span><b>${served}</b>/${n} served</span><span><b>${waiting}</b> waiting</span><span><b>${f0(move)}</b> cyl moved</span><span><b>${f1(avg)}</b> ms avg wait</span>`;
+    const why = cur ? (res.algo === "ADAPTIVE" || cur.mode >= 0 ? `<span class="chip"><span class="sw" style="background:var(--m${cur.mode})"></span>${MODE[cur.mode]}</span> ` : "") + esc(cur.why) + "." : "Waiting for the first request.";
+    $(`#sim${side}Why`).innerHTML = why;
+  }
+  function drawSim() {
+    if (st.tab !== "sim") return;
+    const box = $("#simBody");
+    if (!st.out || !st.reqs.length) { box.hidden = true; $("#simEmpty").hidden = false; $("#simEmpty").textContent = st.out ? "No requests to simulate. Add cylinders to the queue." : "Fix the input above first."; return; }
+    box.hidden = false; $("#simEmpty").hidden = true;
+    const col = colors(), A = st.out[$("#simA").value], B = st.out[$("#simB").value], end = simEnd();
+    A.algo = $("#simA").value; B.algo = $("#simB").value;
+    $("#simAName").textContent = NAME(A.algo); $("#simBName").textContent = NAME(B.algo);
+    drawDisk($("#cvA"), A, SIM.t, col); drawDisk($("#cvB"), B, SIM.t, col);
+    drawTrace($("#trA"), A, SIM.t, end, col); drawTrace($("#trB"), B, SIM.t, end, col);
+    simStats("A", A, SIM.t); simStats("B", B, SIM.t);
+    const eA = A.steps.length ? A.steps[A.steps.length - 1].fin : 0, eB = B.steps.length ? B.steps[B.steps.length - 1].fin : 0;
+    $("#simClock").textContent = SIM.t >= end && end > 0
+      ? `Done. ${NAME(A.algo)} finished at ${f1(eA)} ms, ${NAME(B.algo)} at ${f1(eB)} ms`
+      : `Simulated time ${f1(SIM.t)} of ${f1(end)} ms`;
+    $("#simSeek").max = String(end); $("#simSeek").value = String(SIM.t);
+    $("#simPlay").textContent = SIM.playing ? "Pause" : SIM.t >= end && end > 0 ? "Replay" : "Play";
+  }
+
+  // ------------------------------------------------------------ drive sounds
+  // Generated with Web Audio, no sound files: a spindle hum while the drives run, and a click plus a
+  // short thunk for every seek (longer seeks sound longer and lower). Left drive left speaker, right drive right.
+  const SND = { on: true, ctx: null, master: null, noise: null, hum: null };
+  function audioInit() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!SND.ctx) {
+      const ctx = (SND.ctx = new AC());
+      SND.master = ctx.createGain(); SND.master.gain.value = 0.7; SND.master.connect(ctx.destination);
+      const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      SND.noise = buf;
+    }
+    if (SND.ctx.state === "suspended") SND.ctx.resume();
+  }
+  function humStart() {
+    if (!SND.on || !SND.ctx || SND.hum) return;
+    const ctx = SND.ctx, now = ctx.currentTime, g = ctx.createGain();
+    g.gain.value = 0; g.connect(SND.master);
+    const o1 = ctx.createOscillator(); o1.type = "sine";
+    o1.frequency.setValueAtTime(50, now); o1.frequency.linearRampToValueAtTime(120, now + 0.9);
+    const o2 = ctx.createOscillator(); o2.type = "triangle";
+    o2.frequency.setValueAtTime(100, now); o2.frequency.linearRampToValueAtTime(240, now + 0.9);
+    const g2 = ctx.createGain(); g2.gain.value = 0.25;
+    const n = ctx.createBufferSource(); n.buffer = SND.noise; n.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 900; f.Q.value = 0.7;
+    const gn = ctx.createGain(); gn.gain.value = 0.06;
+    o1.connect(g); o2.connect(g2); g2.connect(g); n.connect(f); f.connect(gn); gn.connect(g);
+    o1.start(now); o2.start(now); n.start(now);
+    g.gain.setTargetAtTime(0.04, now, 0.25);
+    SND.hum = { g, nodes: [o1, o2, n] };
+  }
+  function humStop() {
+    if (!SND.hum || !SND.ctx) return;
+    const { g, nodes } = SND.hum, now = SND.ctx.currentTime;
+    g.gain.cancelScheduledValues(now); g.gain.setTargetAtTime(0, now, 0.12);
+    for (const n of nodes) { try { n.stop(now + 0.8); } catch (e) { /* already stopped */ } }
+    SND.hum = null;
+  }
+  function seekSound(dist, nc, pan, delay) {
+    if (!SND.on || !SND.ctx || dist <= 0) return;
+    const ctx = SND.ctx, t = ctx.currentTime + Math.max(0, delay), frac = nc > 1 ? Math.min(1, dist / (nc - 1)) : 0;
+    const dur = 0.012 + frac * 0.07;
+    const out = ctx.createGain(); out.gain.value = 1;
+    if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = pan; out.connect(p); p.connect(SND.master); }
+    else out.connect(SND.master);
+    // the arm moving: a band-passed burst of noise
+    const n = ctx.createBufferSource(); n.buffer = SND.noise;
+    const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 2800 - frac * 1500; f.Q.value = 1.3;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3 + frac * 0.25, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    n.connect(f); f.connect(g); g.connect(out); n.start(t, Math.random() * 0.5); n.stop(t + dur + 0.02);
+    // the arm stopping on the track: a short low thunk
+    const ts = t + dur * 0.8, o = ctx.createOscillator(), go = ctx.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(190 - frac * 70, ts);
+    go.gain.setValueAtTime(0.0001, ts); go.gain.exponentialRampToValueAtTime(0.16 + frac * 0.2, ts + 0.004); go.gain.exponentialRampToValueAtTime(0.0001, ts + 0.05);
+    o.connect(go); go.connect(out); o.start(ts); o.stop(ts + 0.06);
+  }
+  // play the seeks each drive starts between two animation frames, spread at their real offsets
+  function seeksBetween(res, t0, t1, pan, rate) {
+    if (!SND.on || !SND.ctx) return;
+    const P = prep(res), k0 = lastLE(P.start, t0), k1 = lastLE(P.start, t1);
+    const idx = [];
+    for (let i = k0 + 1; i <= k1; i++) if (res.steps[i].travel > 0) idx.push(i);
+    const take = idx.length > 6 ? idx.filter((_, j) => j % Math.ceil(idx.length / 6) === 0) : idx;
+    for (const i of take) { const s = res.steps[i]; seekSound(s.travel, res.cfg.ncyl, pan, (s.t - t0) / rate); }
+  }
+  function simFrame(now) {
+    if (!SIM.playing) return;
+    const dt = Math.min(100, now - SIM.last), rate = Number($("#simSpeed").value), t0 = SIM.t;
+    SIM.last = now;
+    SIM.t += (dt / 1000) * rate;
+    const end = simEnd();
+    if (SIM.t >= end) { SIM.t = end; SIM.playing = false; humStop(); }
+    seeksBetween(st.out[$("#simA").value], t0, SIM.t, -0.7, rate);
+    seeksBetween(st.out[$("#simB").value], t0, SIM.t, 0.7, rate);
+    drawSim();
+    if (SIM.playing) SIM.raf = requestAnimationFrame(simFrame);
+  }
+  function simStop() { SIM.playing = false; cancelAnimationFrame(SIM.raf); humStop(); }
+  function simReset() { simStop(); SIM.t = 0; }
+  $("#simPlay").addEventListener("click", () => {
+    if (SIM.playing) { simStop(); drawSim(); return; }
+    if (SIM.t >= simEnd()) SIM.t = 0;
+    if (SND.on) { audioInit(); humStart(); }
+    SIM.playing = true; SIM.last = performance.now(); SIM.raf = requestAnimationFrame(simFrame); drawSim();
+  });
+  $("#simReset").addEventListener("click", () => { simReset(); drawSim(); });
+  $("#simSound").addEventListener("click", (e) => {
+    SND.on = !SND.on;
+    e.currentTarget.textContent = SND.on ? "Sound on" : "Sound off";
+    e.currentTarget.setAttribute("aria-pressed", String(SND.on));
+    if (!SND.on) humStop();
+    else if (SIM.playing) { audioInit(); humStart(); }
+  });
+  $("#simSeek").addEventListener("input", (e) => { simStop(); SIM.t = Number(e.target.value); drawSim(); });
+  for (const s of ["#simA", "#simB"]) $(s).addEventListener("change", () => { simReset(); drawSim(); });
+  window.addEventListener("resize", () => drawSim());
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => drawSim());
+
+  // ------------------------------------------------------------ step controls
+  function stop() { if (st.timer) { clearInterval(st.timer); st.timer = null; } }
+  function go(k) { st.k = k; renderStep(); }
+  const total = () => (st.out ? st.out[st.salgo].steps.length : 0);
+  $("#first").addEventListener("click", () => { stop(); go(0); });
+  $("#prev").addEventListener("click", () => { stop(); go(Math.max(0, st.k - 1)); });
+  $("#next").addEventListener("click", () => { stop(); go(Math.min(total() - 1, st.k + 1)); });
+  $("#last").addEventListener("click", () => { stop(); go(total() - 1); });
+  $("#sk").addEventListener("input", (e) => { stop(); go(Number(e.target.value)); });
+  $("#salgo").addEventListener("change", (e) => { st.salgo = e.target.value; renderStep(); });
+  $("#play").addEventListener("click", () => {
+    if (st.timer) { stop(); renderStep(); return; }
+    if (st.k >= total() - 1) st.k = 0;
+    st.timer = setInterval(() => { if (st.k >= total() - 1) { stop(); renderStep(); return; } go(st.k + 1); }, 1000 / Number($("#speed").value));
+    renderStep();
+  });
+  $("#speed").addEventListener("change", () => { if (st.timer) { stop(); $("#play").click(); } });
+  $("#inj").addEventListener("click", () => {
+    const c = Number(el.injc.value);
+    if (!st.out || !st.reqs.length) return;
+    if (el.injc.value === "" || !Number.isInteger(c) || c < 0 || c > st.cfg.ncyl - 1) {
+      $("#err").textContent = `The new request needs a whole cylinder number between 0 and ${st.cfg.ncyl - 1}.`; $("#err").hidden = false; return;
+    }
+    const s = st.out[st.salgo].steps[st.k];
+    st.injected.push({ cyl: c, arr: s.t + 0.001 });
+    run(true);
+    $("#note").textContent = `Added a request at cylinder ${c}, arriving just after step ${st.k + 1}. Step forward to see how ${NAME(st.salgo)} handles it.`;
+  });
+  document.addEventListener("keydown", (e) => {
+    if (st.tab !== "step" || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); $("#next").click(); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); $("#prev").click(); }
+  });
+
+  // ------------------------------------------------------------ wiring
+  for (const t of ["sim", "compare", "starve", "step", "trace", "about"]) $("#tab-" + t).addEventListener("click", () => { stop(); st.tab = t; render(); });
+  let deb = null;
+  const later = () => { clearTimeout(deb); deb = setTimeout(() => { st.injected = []; run(); }, 250); };
+  el.wl.addEventListener("change", () => { st.injected = []; applyWorkload(el.wl.value); run(); });
+  el.edge.addEventListener("change", () => { st.injected = []; applyEdge(el.edge.value, true); });
+  for (const k of ["n", "rate", "ncyl", "head", "seed", "queue", "settle", "stroke", "rot", "qbusy", "age", "floor", "cap", "dlmax"]) el[k].addEventListener("input", later);
+  for (const k of ["dir", "ret", "cdir", "ovf", "freeze"]) el[k].addEventListener("change", () => { st.injected = []; run(); });
+  $("#reseed").addEventListener("click", () => { el.seed.value = 1 + Math.floor(Math.random() * 9999); st.injected = []; run(); });
+  $("#ctl").addEventListener("submit", (e) => e.preventDefault());
+
+  const goView = (t) => { stop(); st.tab = t; render(); window.scrollTo(0, 0); };
+  for (const b of document.querySelectorAll("[data-go]")) b.addEventListener("click", () => {
+    const t = b.getAttribute("data-go");
+    if (t === "starve" && el.wl.value !== "starvation") { $("#scenario").value = "w:starvation"; $("#scenario").dispatchEvent(new Event("change")); }
+    goView(t);
+  });
+  for (const b of document.querySelectorAll("[data-ch]")) b.addEventListener("click", () => {
+    $("#scenario").value = "e:" + b.getAttribute("data-ch");
+    $("#scenario").dispatchEvent(new Event("change"));
+    window.scrollTo(0, 0);
+  });
+  $("#homeBtn").addEventListener("click", () => goView("home"));
+  $("#letsGo").addEventListener("click", () => goView("home"));
+  // Diskie's eyes follow the pointer
+  const pupils = [...document.querySelectorAll("#v-welcome .pupil")], glints = [...document.querySelectorAll("#v-welcome .glint")];
+  window.addEventListener("pointermove", (e) => {
+    if (st.tab !== "welcome") return;
+    const svg = document.querySelector("#v-welcome .scene"), r = svg.getBoundingClientRect(), k = 820 / r.width;
+    pupils.forEach((pu, i) => {
+      const cx = +pu.dataset.cx, cy = +pu.dataset.cy;
+      const dx = (e.clientX - r.left) * k - cx, dy = (e.clientY - r.top) * k - cy, d = Math.hypot(dx, dy) || 1, m = Math.min(9, d / 12);
+      pu.setAttribute("cx", (cx + (dx / d) * m).toFixed(1)); pu.setAttribute("cy", (cy + (dy / d) * m).toFixed(1));
+      glints[i].setAttribute("cx", (cx + 3 + (dx / d) * m).toFixed(1)); glints[i].setAttribute("cy", (cy - 4 + (dy / d) * m).toFixed(1));
+    });
+  });
+  $("#scenario").addEventListener("change", (e) => {
+    const [kind, key] = e.target.value.split(":");
+    st.injected = [];
+    if (kind === "w") { el.wl.value = key; applyWorkload(key); run(); }
+    else { el.wl.value = "custom"; el.edge.value = key; applyWorkload("custom"); applyEdge(key, true); }
+  });
+  $("#toggleSettings").addEventListener("click", (e) => {
+    const f = $("#ctl"), open = f.hidden;
+    f.hidden = !open;
+    e.currentTarget.setAttribute("aria-expanded", String(open));
+    e.currentTarget.textContent = open ? "Hide settings" : "Settings";
+  });
+  el.wl.value = "mixed";
+  applyWorkload("mixed");
+  run();
+})();
+</script>
+
+</body>
+</html>

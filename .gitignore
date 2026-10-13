@@ -1,0 +1,9 @@
+# compiled simulator
+disksim
+disksim.exe
+*.o
+# CSVs written when you run ./disksim here (the saved copies live in results/)
+/*.csv
+node_modules/
+.DS_Store
+Thumbs.db
